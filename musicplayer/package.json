@@ -1,0 +1,9 @@
+{
+  "name": "pumbas-music-player",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A local music player that automatically scans the usa-1 folder.",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
