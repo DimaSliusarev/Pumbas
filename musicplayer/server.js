@@ -1,5 +1,24 @@
 "use strict";
 
+require("dotenv").config();
+
+const { recommendFolder } = require("./recommender");
+
+(async () => {
+  try {
+    const result = await recommendFolder("Media", "Walking");
+    console.log("AI recommended folder:", result);
+  } catch (err) {
+    console.error(err);
+  }
+})();
+
+const OpenAI = require("openai");
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
 const fs = require("node:fs");
 const path = require("node:path");
 const http = require("node:http");

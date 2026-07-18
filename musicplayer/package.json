@@ -5,5 +5,9 @@
   "description": "A local music player that automatically scans the usa-1 folder.",
   "scripts": {
     "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^17",
+    "openai": "^5"
   }
 }
