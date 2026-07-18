@@ -154,7 +154,7 @@ async function loadLibrary() {
     setStatus(`${tracks.length} tracks available`);
   } catch (error) {
     selector.replaceChildren(new Option("Music library unavailable", ""));
-    setStatus("Could not scan usa-1. Start this page with npm start from the musicplayer folder.", "error");
+    setStatus("Could not load the music library. If running locally, start the page with npm start.", "error");
     console.error(error);
   }
 }

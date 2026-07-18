@@ -2,8 +2,9 @@
   "name": "pumbas-music-player",
   "version": "1.0.0",
   "private": true,
-  "description": "A local music player that automatically scans the usa-1 folder.",
+  "description": "A music player with a dynamically generated Netlify Functions playlist.",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "node build.js"
   }
 }

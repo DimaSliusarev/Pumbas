@@ -1,8 +1,12 @@
 # Pumbas
 
-## Run the music player locally
+## Music player
 
-The music player scans the `musicplayer/usa-1` folder and builds its track menu whenever the page loads.
+The music player scans `musicplayer/usa-1`, groups tracks by folder, and exposes the playlist through `/api/tracks`.
+
+- During local development, `server.js` provides the API and streams the media.
+- On Netlify, a serverless function provides the same API while Netlify serves the media as static files.
+- During every Netlify build, `build.js` regenerates the playlist from the current contents of `usa-1`.
 
 ### Requirements
 
@@ -19,7 +23,7 @@ npm --version
 
 If either command is unavailable, install Node.js from [nodejs.org](https://nodejs.org/) and reopen the terminal.
 
-### Start the player
+## Run locally
 
 1. Open a terminal in the root `Pumbas` project folder.
 2. Move into the music player folder:
@@ -34,30 +38,80 @@ If either command is unavailable, install Node.js from [nodejs.org](https://node
    npm start
    ```
 
-   The project has no third-party packages, so an `npm install` step is not required.
+   The project has no third-party runtime packages, so an `npm install` step is not required.
 
-4. Open the following address in a browser:
+4. Open the following address:
 
    ```text
    http://localhost:8080
    ```
 
-5. Choose a song from the dropdown menu. Tracks are grouped using their folder names.
+5. Choose a song from the dropdown menu.
 
-Keep the terminal open while using the player. To stop the server, return to the terminal and press `Control+C`.
+Keep the terminal open while using the player. Press `Control+C` in the terminal to stop it.
 
-### Add music
+### Use a different local port
+
+Port `8080` is used by default. If it is occupied, run:
+
+```bash
+PORT=3000 npm start
+```
+
+Then open `http://localhost:3000`.
+
+## Create a Netlify production build
+
+From the `musicplayer` folder, run:
+
+```bash
+npm run build
+```
+
+This command:
+
+1. Scans all supported media in `usa-1`.
+2. Generates the playlist used by the Netlify Function.
+3. Creates `musicplayer/dist` with `index.html`, the CSS, browser JavaScript, and media files.
+
+The `dist` directory is generated and ignored by Git. Netlify creates it again during each deployment.
+
+## Deploy to Netlify
+
+The root `netlify.toml` already contains the required build, publish-directory, and Functions settings.
+
+1. Commit and push the complete `Pumbas` repository to GitHub, GitLab, Bitbucket, or Azure DevOps.
+2. Sign in to Netlify.
+3. Select **Add new project**, then **Import an existing project**.
+4. Connect the Git provider and select the `Pumbas` repository.
+5. Netlify should read these settings from `netlify.toml`:
+
+   ```text
+   Base directory: musicplayer
+   Build command: npm run build
+   Publish directory: musicplayer/dist
+   Functions directory: musicplayer/netlify/functions
+   ```
+
+6. Select **Deploy**.
+
+After deployment, the music player is served from the Netlify site URL and its playlist is returned by the serverless `/api/tracks` endpoint.
+
+Do not configure `npm start` as the Netlify build command. `server.js` is only for local development and is not run in production.
+
+## Add music
 
 1. Add a media file anywhere inside `musicplayer/usa-1`.
-2. Use subfolders to control how tracks are grouped in the dropdown. For example:
+2. Use subfolders to control its dropdown group. For example:
 
    ```text
    musicplayer/usa-1/Exercise/Running/My Song.mp3
    ```
 
-3. Reload the browser page. The server scans the folder again and includes the new track automatically.
+3. For local development, reload the page.
+4. For Netlify, commit and push the new file. Netlify rebuilds the site and regenerates the serverless playlist automatically.
 
-Supported file extensions are:
+Supported extensions are:
 
 - `.mp3`
 - `.m4a`
@@ -69,39 +123,36 @@ Supported file extensions are:
 
 Actual playback support can vary by browser and by the codec used inside a file.
 
-### Use a different port
+## Troubleshooting
 
-Port `8080` is used by default. If it is already occupied, start the player on another port:
+### The local page says the music library is unavailable
 
-```bash
-PORT=3000 npm start
-```
+Do not open `musicplayer.html` directly. Start the project with `npm start` from the `musicplayer` folder and use the printed localhost address.
 
-Then open `http://localhost:3000`.
-
-### Troubleshooting
-
-#### The page says that the music library is unavailable
-
-Do not open `musicplayer.html` directly or serve it with an unrelated static-file extension. The `/api/tracks` endpoint is provided by `server.js`, so start the project with `npm start` and use the printed localhost address.
-
-#### A new song does not appear
+### A new track does not appear locally
 
 - Confirm that the file is inside `musicplayer/usa-1`.
-- Confirm that its extension is in the supported list above.
-- Reload the page after adding the file.
+- Confirm that its extension is supported.
+- Reload the page.
 - Check the terminal for a folder-scanning error.
 
-#### A track appears but does not play
+### A new track does not appear on Netlify
 
-- Try opening another track to confirm the player is working.
+- Confirm that the media file was committed and pushed.
+- Check that Netlify ran a new deployment for the commit.
+- Open the Netlify deploy log and confirm that the build reports the expected track count.
+- Confirm that `netlify.toml` was detected at the repository root.
+
+### A track appears but does not play
+
 - Check that the media file is not damaged.
-- Try MP3 format, which has the broadest browser support.
+- Try MP3 format, which has broad browser support.
+- Confirm that the file appears in the Netlify deploy file browser under `usa-1`.
 
-#### The server reports that the port is already in use
+### The local port is already in use
 
-Stop the other process using port `8080`, or follow the instructions above to use a different port.
+Stop the other process using port `8080`, or use a different port as described above.
 
-## Security note
+## Security and copyright
 
-Never place ChatGPT/OpenAI API keys or other secrets in HTML or browser-side JavaScript, and do not commit them to the repository.
+Never place ChatGPT/OpenAI API keys or other secrets in HTML or browser-side JavaScript, and do not commit them to the repository. Only publish music that you have permission to distribute publicly.
