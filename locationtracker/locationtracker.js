@@ -1,9 +1,10 @@
-//NOTE: I commented out the Map Logic cause 
-// I assume we dont need it for the final App 
-// but you guys can test it out.
+// Campus Context Tracker
+// Location (geofencing) + Activity recognition + Map + LLM prompt generation.
+// One button turns both sensors on.
+
 
 // List of all the Areas
-// We can change/ad more locations later if we want more
+// We can change/add more locations later if we want more
 
 var areas = [
   { label: "HVillage", corners: [
@@ -154,11 +155,17 @@ var areas = [
 
 //State
 var lastPosition = null; // { lat, lng, accuracy }
-var watchId = null; //Toggle for ON an OFF for tracking 
-var currentAreas = []; //Use this to get the current area for the music app
+var watchId = null;      //Toggle for ON and OFF for tracking
+var currentAreas = [];   //Use this to get the current area for the music app
 
 //Setting the Decimal Point (Accuracy)
 function fmt(n){ return Number(n).toFixed(6); }
+
+//Writes to a span only if it exists, so the UI can be trimmed freely
+function setText(id, value){
+  var node = document.getElementById(id);
+  if (node) node.textContent = value;
+}
 
 // Ray-casting point-in-polygon
 function pointInPolygon(lat, lng, corners){
@@ -174,13 +181,6 @@ function pointInPolygon(lat, lng, corners){
   return inside;
 }
 
-//For getting position
-//Detection
-function toggleWatch(){
-  if (watchId === null) startWatch();
-  else stopWatch();
-}
-
 function startWatch(){
   if (!navigator.geolocation){
     alert('Geolocation not supported.');
@@ -189,24 +189,20 @@ function startWatch(){
   watchId = navigator.geolocation.watchPosition(
     function(p){
       lastPosition = { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy };
-      // drawPosition(); //Can comment out to remove map
+      drawPosition();
       evaluatePosition();
-      document.getElementById('posInfo').textContent =
-        'Position: ' + fmt(lastPosition.lat) + ', ' + fmt(lastPosition.lng) +
-        ' (accuracy +/- ' + Math.round(lastPosition.accuracy) + ' m)';
+      setText('posInfo',
+        'Position: ' + fmt(lastPosition.lat) + ', ' + fmt(lastPosition.lng));
     },
     function(err){
-      document.getElementById('posInfo').textContent = 'Error: ' + err.message;
+      setText('posInfo', 'Error: ' + err.message);
     },
     { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
   );
-  document.getElementById('watchBtn').textContent = 'Stop tracking';
 }
 
 function stopWatch(){
   if (watchId !== null){ navigator.geolocation.clearWatch(watchId); watchId = null; }
-  document.getElementById('watchBtn').textContent = 'Start tracking';
-  document.getElementById('status').textContent = 'Detection stopped.';
 }
 
 function evaluatePosition(){
@@ -219,85 +215,457 @@ function evaluatePosition(){
       names.push(areas[i].label);
     }
   }
-
   currentAreas = names;
-
-  updateStatusDisplay();
-  // redrawAreas(insideSet); //Can comment out to remove map
-}
-
-function updateStatusDisplay(){ //For updating status in the UI
-  document.getElementById('status').textContent =
-    currentAreas.length ? ('You are in: ' + currentAreas.join(', ')) : 'Not in any area.';
+  redrawAreas(insideSet);
+  updateContextDisplay();
 }
 
 
-//Stuff for Drawing the Map and UI. Not really necessary for the app
+//Activity Recognition Part
 
-//Render Each Area in the List
-function renderList(){ //Can comment out to remove list
-  var wrap = document.getElementById('areaList');
-  if (areas.length === 0){ wrap.textContent = 'No areas loaded.'; return; }
-  var html = '<table border="1" cellpadding="5"><tr><th>Label</th><th>Corners (lat, lng)</th></tr>';
-  for (var i = 0; i < areas.length; i++){
-    var a = areas[i];
-    var lines = [];
-    for (var k = 0; k < a.corners.length; k++){
-      lines.push((k + 1) + ': ' + fmt(a.corners[k].lat) + ', ' + fmt(a.corners[k].lng));
+
+var NUM_DATA_PER_FRAME = 200; //samples per classification window (~3.4 s at 59 Hz)
+var SLIDE = 50;               //how many old samples to drop after each classification
+var VOTE_LENGTH = 5;          //majority vote over the last N classifications
+
+var magdata = [];   //acceleration magnitudes
+var timedata = [];  //event timestamps in ms, so we can measure the true sample rate
+
+//Features
+var magMean = 0, magStd = 0, magMad = 0, magRms = 0;
+var magMax = 0, magRange = 0, magCrossRate = 0, magPeakRate = 0;
+
+var voteBuffer = [];
+var currentActivity = "unknown";
+var currentActivityRaw = "unknown";
+
+var motionListening = false;
+var accelSource = "none";
+var uiTimer = null;
+
+//Low-pass gravity estimate. Only used if the browser cannot give us
+//gravity-free acceleration directly.
+var GRAVITY_ALPHA = 0.95;
+var gravity = { x: 0, y: 0, z: 0 };
+var gravitySamples = 0;
+
+function startDeviceMotion(){
+  if (motionListening) return;
+  window.addEventListener('devicemotion', handleAcceleration, false);
+  motionListening = true;
+  magdata = [];
+  timedata = [];
+  voteBuffer = [];
+  gravity = { x: 0, y: 0, z: 0 };
+  gravitySamples = 0;
+  if (uiTimer === null) uiTimer = setInterval(refreshFeatureUI, 300);
+}
+
+function stopDeviceMotion(){
+  window.removeEventListener('devicemotion', handleAcceleration, false);
+  motionListening = false;
+  magdata = [];
+  timedata = [];
+  voteBuffer = [];
+  if (uiTimer !== null){ clearInterval(uiTimer); uiTimer = null; }
+}
+
+function handleAcceleration(ev){
+  var ax, ay, az;
+  var a = ev.acceleration;
+  var degenerate = !a || a.x === null || a.x === undefined ||
+                   (a.x === 0 && a.y === 0 && a.z === 0);
+
+  if (!degenerate){
+    //Browser gives real gravity-free acceleration
+    accelSource = 'acceleration';
+    ax = a.x; ay = a.y; az = a.z;
+  } else {
+    //low-pass filter
+    var g = ev.accelerationIncludingGravity;
+    if (!g || g.x === null || g.x === undefined){
+      accelSource = 'unavailable';
+      setText('warn', 'This browser gives no usable acceleration. Use Safari or Chrome over https.');
+      return;
     }
-    html += '<tr><td>' + a.label + '</td><td>' + lines.join('<br>') + '</td></tr>';
+    accelSource = 'gravity removed by filter';
+
+    gravity.x = GRAVITY_ALPHA * gravity.x + (1 - GRAVITY_ALPHA) * g.x;
+    gravity.y = GRAVITY_ALPHA * gravity.y + (1 - GRAVITY_ALPHA) * g.y;
+    gravity.z = GRAVITY_ALPHA * gravity.z + (1 - GRAVITY_ALPHA) * g.z;
+
+    ax = g.x - gravity.x;
+    ay = g.y - gravity.y;
+    az = g.z - gravity.z;
+
+    //Let the filter settle before trusting it
+    gravitySamples++;
+    if (gravitySamples < 60) return;
   }
-  html += '</table>';
-  wrap.innerHTML = html;
+
+  magdata.push(Math.sqrt(ax * ax + ay * ay + az * az));
+  timedata.push(ev.timeStamp || Date.now());
+
+  if (magdata.length >= NUM_DATA_PER_FRAME){
+    featureExtraction();
+    currentActivityRaw = smooth(classifyRaw());
+    currentActivity = toMainClass(currentActivityRaw);
+    recordContext();
+    updateContextDisplay();
+
+    //Slide the window instead of clearing it, so we keep classifying continuously
+    magdata = magdata.slice(SLIDE);
+    timedata = timedata.slice(SLIDE);
+  }
 }
 
-//Map
-// var map = L.map('map').setView([35.38757, 139.42723], 16); //Can comment out to remove map
-// L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { //Can comment out to remove map
-//   maxZoom: 19}).addTo(map); //Can comment out to remove map
+//Runs on a timer so the features move in real time, not once per window
+function refreshFeatureUI(){
+  setText('accelSource', accelSource);
+  setText('sampleCount', magdata.length);
+  if (magdata.length > 1) featureExtraction();
+}
 
-// var posMarker = null; //Can comment out to remove map
-// var accCircle = null; //Can comment out to remove map
-// var polyLayers = []; //Can comment out to remove map
+function featureExtraction(){
+  var n = magdata.length;
+  if (n < 2) return;
+  var i;
 
-// function latlngs(area){ //Can comment out to remove map
-//   return area.corners.map(function(c){ return [c.lat, c.lng]; });
-// }
+  var sum = 0;
+  for (i = 0; i < n; i++){ sum += magdata[i]; }
+  magMean = sum / n;
 
-//Draw areas
-// function redrawAreas(insideSet){ //Can comment out to remove map
-//   for (var i = 0; i < polyLayers.length; i++){ map.removeLayer(polyLayers[i]); }
-//   polyLayers = [];
-//   insideSet = insideSet || {};
-//   for (var j = 0; j < areas.length; j++){
-//     var hit = insideSet[j] === true;
-//     var poly = L.polygon(latlngs(areas[j]), {
-//       color: hit ? 'red' : 'blue',
-//       weight: 2,
-//       fillOpacity: hit ? 0.3 : 0.1
-//     }).addTo(map).bindTooltip(areas[j].label);
-//     polyLayers.push(poly);
-//   }
-// }
+  var sqSum = 0, absSum = 0, sqValSum = 0;
+  var mx = magdata[0], mn = magdata[0];
+  for (i = 0; i < n; i++){
+    var v = magdata[i];
+    var d = v - magMean;
+    sqSum += d * d;
+    absSum += Math.abs(d);
+    sqValSum += v * v;
+    if (v > mx) mx = v;
+    if (v < mn) mn = v;
+  }
+  magStd = Math.sqrt(sqSum / n);
+  magMad = absSum / n;
+  magRms = Math.sqrt(sqValSum / n);
+  magMax = mx;
+  magRange = mx - mn;
 
-// //Draw current position
-// function drawPosition(){ //Can comment out to remove map
-//   if (!lastPosition) return;
-//   var ll = [lastPosition.lat, lastPosition.lng];
-//   if (posMarker) map.removeLayer(posMarker);
-//   if (accCircle) map.removeLayer(accCircle);
-//   posMarker = L.marker(ll).addTo(map).bindTooltip('You');
-//   accCircle = L.circle(ll, { radius: lastPosition.accuracy, weight: 1, fillOpacity: 0.1 }).addTo(map);
-// }
+  //Window duration from real timestamps, so cadence stays correct on any device
+  var duration = (timedata[n - 1] - timedata[0]) / 1000;
+  if (!(duration > 0)) duration = n / 59;
+
+  //Mean-crossing rate: the cadence feature that separates walking from squatting
+  var crossings = 0;
+  for (i = 1; i < n; i++){
+    if ((magdata[i - 1] < magMean) !== (magdata[i] < magMean)) crossings++;
+  }
+  magCrossRate = crossings / duration;
+
+  //Peak rate: peaks above mean + 0.5*std, with a gap so one bump counts once
+  var thresh = magMean + 0.5 * magStd;
+  var peaks = 0;
+  i = 1;
+  while (i < n - 1){
+    if (magdata[i] > thresh && magdata[i] >= magdata[i - 1] && magdata[i] > magdata[i + 1]){
+      peaks++;
+      i += 12;
+    } else {
+      i++;
+    }
+  }
+  magPeakRate = peaks / duration;
+
+  setText('magMean',      magMean.toFixed(4));
+  setText('magStd',       magStd.toFixed(4));
+  setText('magMad',       magMad.toFixed(4));
+  setText('magRms',       magRms.toFixed(4));
+  setText('magMax',       magMax.toFixed(4));
+  setText('magRange',     magRange.toFixed(4));
+  setText('magCrossRate', magCrossRate.toFixed(3));
+  setText('magPeakRate',  magPeakRate.toFixed(3));
+}
+
+//J48 tree from WEKA
+function classifyRaw(){
+  if (magRms <= 5.70){
+    if (magMean <= 0.95351){
+      return "standing";
+    } else {
+      if (magCrossRate <= 6.49){
+        if (magPeakRate <= 2.065){
+          return "squating";
+        } else {
+          if (magMean <= 2.22829){
+            return "squating";
+          } else {
+            return "walking";
+          }
+        }
+      } else {
+        if (magPeakRate <= 1.77){
+          if (magCrossRate <= 7.08){
+            return "squating";
+          } else {
+            return "walking";
+          }
+        } else {
+          return "walking";
+        }
+      }
+    }
+  } else {
+    return "running";
+  }
+}
+
+//Majority vote over the last few windows so the label does not flicker
+function smooth(raw){
+  voteBuffer.push(raw);
+  if (voteBuffer.length > VOTE_LENGTH) voteBuffer.shift();
+
+  var tally = {};
+  var best = raw, bestCount = 0;
+  for (var i = 0; i < voteBuffer.length; i++){
+    var label = voteBuffer[i];
+    tally[label] = (tally[label] || 0) + 1;
+    if (tally[label] > bestCount){ bestCount = tally[label]; best = label; }
+  }
+  return best;
+}
+
+//Fold the tree leaves into the classes the music app cares about
+function toMainClass(raw){
+  switch (raw){
+    case "standing":  return "resting";
+    case "walking":   return "walking";
+    case "running":   return "running";
+    case "squating":  return "exercise";
+    default:          return "unknown";
+  }
+}
+
+
+//Full information of location +activity
+function getContext(){
+  return {
+    areas: currentAreas,
+    activity: currentActivity,
+    activityRaw: currentActivityRaw
+  };
+}
+
+function updateContextDisplay(){
+  var where = currentAreas.length ? currentAreas.join(', ') : 'no area';
+  setText('context', where + ' / ' + currentActivity);
+}
+
+
+// Llm prompt part
+
+var HISTORY_SECONDS = 60;     //how far back the prompt looks
+var PROMPT_INTERVAL_MS = 60000; //regenerate the prompt every 60 seconds
+
+var contextHistory = [];  //{ t, activity, areas }
+var promptTimer = null;
+var lastPrompt = "";
+
+
+function recordContext(){
+  var now = Date.now();
+  contextHistory.push({ t: now, activity: currentActivity, areas: currentAreas.slice() });
+
+  //Drop anything older than the window we care about
+  var cutoff = now - HISTORY_SECONDS * 1000;
+  while (contextHistory.length && contextHistory[0].t < cutoff){
+    contextHistory.shift();
+  }
+}
+
+//Work out what the user was mostly doing over the last minute.
+//Returns { activity, share, samples } where share is 0..1.
+function summarizeLastMinute(){
+  var cutoff = Date.now() - HISTORY_SECONDS * 1000;
+  var recent = [];
+  for (var i = 0; i < contextHistory.length; i++){
+    if (contextHistory[i].t >= cutoff) recent.push(contextHistory[i]);
+  }
+  if (recent.length === 0){
+    return { activity: "unknown", share: 0, samples: 0 };
+  }
+
+  var tally = {};
+  var best = "unknown", bestCount = 0;
+  for (var j = 0; j < recent.length; j++){
+    var act = recent[j].activity;
+    tally[act] = (tally[act] || 0) + 1;
+    if (tally[act] > bestCount){ bestCount = tally[act]; best = act; }
+  }
+  return { activity: best, share: bestCount / recent.length, samples: recent.length };
+}
+
+//Human readable time, e.g. "Monday 14:32"
+function describeTime(){
+  var days = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+  var d = new Date();
+  var hh = d.getHours() < 10 ? "0" + d.getHours() : "" + d.getHours();
+  var mm = d.getMinutes() < 10 ? "0" + d.getMinutes() : "" + d.getMinutes();
+  return days[d.getDay()] + " " + hh + ":" + mm;
+}
+
+//Human readable location
+function describeLocation(){
+  if (!lastPosition) return "somewhere on the SFC campus (location not yet fixed)";
+  if (currentAreas.length === 0) return "outdoors on the SFC campus, not inside any mapped area";
+  if (currentAreas.length === 1) return "at " + currentAreas[0] + " on the SFC campus";
+  return "at " + currentAreas.join(" and ") + " on the SFC campus";
+}
+
+//Turn a class label into something an LLM reads naturally
+function describeActivity(activity){
+  switch (activity){
+    case "resting":  return "resting or standing still";
+    case "walking":  return "walking";
+    case "running":  return "running";
+    case "exercise": return "exercising";
+    default:         return "doing something we could not classify";
+  }
+}
+
+//The template. Edit the wording here and everything downstream follows.
+function buildPrompt(){
+  var summary = summarizeLastMinute();
+  var percent = Math.round(summary.share * 100);
+
+  var confidence;
+  if (summary.samples === 0){
+    confidence = "We have no reliable activity reading yet.";
+  } else if (percent >= 80) {
+    confidence = "This was consistent for essentially the whole minute.";
+  } else {
+    confidence = "The reading was mixed, so treat it as a rough impression rather than a certainty.";
+  }
+
+  return "You are a DJ choosing the next song for one listener, and you can see what they are doing right now.\n\n" +
+         "The time is " + describeTime() + ".\n" +
+         "The user is " + describeLocation() + ".\n" +
+         "Over the past minute they were detected to be " + describeActivity(summary.activity) +
+         " for about " + percent + "% of the time. " + confidence + "\n\n" +
+         "What song would you play to fit this moment? Give one track, and one sentence explaining why it suits " +
+         "their location, the time of day, and what their body is doing.";
+}
+
+//Regenerate the prompt and show it on the page
+function refreshPrompt(){
+  lastPrompt = buildPrompt();
+  setText('prompt', lastPrompt);
+  setText('promptTime', 'last generated at ' + describeTime() +
+    ' (from ' + summarizeLastMinute().samples + ' classifications)');
+  //When we wire up the LLM later, this is where we would send lastPrompt.
+}
+
+//Exposed so the music app can grab the current prompt whenever it wants
+function getPrompt(){
+  return lastPrompt;
+}
+
+
+// Button for starts location and motion together
+
+var running = false;
+
+function toggleAll(){
+  if (running) stopAll();
+  else startAll();
+}
+
+function startAll(){
+  setText('warn', '');
+  contextHistory = [];
+
+  startWatch();
+
+  //iOS 13+ needs the permission request to happen inside a real tap
+  if (typeof DeviceMotionEvent !== 'undefined' &&
+      typeof DeviceMotionEvent.requestPermission === 'function'){
+    DeviceMotionEvent.requestPermission().then(function(state){
+      if (state === 'granted'){
+        startDeviceMotion();
+      } else {
+        setText('warn', 'Motion permission denied. Settings > Apps > Safari > Motion & Orientation Access.');
+      }
+    }).catch(function(e){
+      setText('warn', 'Motion permission failed: ' + e + ' (the page must be https)');
+    });
+  } else {
+    startDeviceMotion();
+  }
+
+  //Fire the prompt every 60 seconds
+  if (promptTimer === null){
+    promptTimer = setInterval(refreshPrompt, PROMPT_INTERVAL_MS);
+  }
+
+  running = true;
+  setText('startBtn', 'Stop tracking');
+  setText('status', 'Tracking.');
+}
+
+function stopAll(){
+  stopWatch();
+  stopDeviceMotion();
+  if (promptTimer !== null){ clearInterval(promptTimer); promptTimer = null; }
+  running = false;
+  setText('startBtn', 'Start tracking');
+  setText('status', 'Stopped.');
+  setText('accelSource', 'none');
+  setText('sampleCount', '0');
+}
 
 
 
+// MAP
 
+var map = L.map('map').setView([35.38757, 139.42723], 16);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+var posMarker = null;
+var accCircle = null;
+var polyLayers = [];
+
+function latlngs(area){
+  return area.corners.map(function(c){ return [c.lat, c.lng]; });
+}
+
+//Draw areas, red if you are inside them
+function redrawAreas(insideSet){
+  for (var i = 0; i < polyLayers.length; i++){ map.removeLayer(polyLayers[i]); }
+  polyLayers = [];
+  insideSet = insideSet || {};
+  for (var j = 0; j < areas.length; j++){
+    var hit = insideSet[j] === true;
+    var poly = L.polygon(latlngs(areas[j]), {
+      color: hit ? 'red' : 'blue',
+      weight: 2,
+      fillOpacity: hit ? 0.3 : 0.1
+    }).addTo(map).bindTooltip(areas[j].label);
+    polyLayers.push(poly);
+  }
+}
+
+//Draw current position
+function drawPosition(){
+  if (!lastPosition) return;
+  var ll = [lastPosition.lat, lastPosition.lng];
+  if (posMarker) map.removeLayer(posMarker);
+  if (accCircle) map.removeLayer(accCircle);
+  posMarker = L.marker(ll).addTo(map).bindTooltip('You');
+  accCircle = L.circle(ll, { radius: lastPosition.accuracy, weight: 1, fillOpacity: 0.1 }).addTo(map);
+}
 
 
 //Initialize
-renderList();
-// redrawAreas(); //Can comment out to remove map
-// if (areas.length){ //Can comment out to remove map
-//   map.fitBounds(L.polygon(latlngs(areas[0])).getBounds(), { maxZoom: 18 }); 
-// }
+setText('windowSize', NUM_DATA_PER_FRAME);
+redrawAreas();
+updateContextDisplay();
