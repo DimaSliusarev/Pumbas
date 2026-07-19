@@ -7,7 +7,7 @@
 // We can change/add more locations later if we want more
 
 var areas = [
-  { label: "HVillage", corners: [
+  { label: "H Village Vibe", corners: [
     { lat: 35.389433, lng: 139.427365 },
     { lat: 35.389211, lng: 139.428019 },
     { lat: 35.390549, lng: 139.428786 },
@@ -216,6 +216,15 @@ function evaluatePosition(){
     }
   }
   currentAreas = names;
+
+window.getCurrentContext = function () {
+    return {
+        area: currentAreas[0] || null,
+        activity: currentActivity
+    };
+};
+
+updateStatusDisplay();
   redrawAreas(insideSet);
   updateContextDisplay();
 }

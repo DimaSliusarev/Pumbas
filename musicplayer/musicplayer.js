@@ -159,6 +159,42 @@ async function loadLibrary() {
   }
 }
 
+async function requestRecommendation(area, activity){
+
+    console.log("Sending:", area);
+    const response = await fetch("/api/recommend",{
+
+    method:"POST",
+
+    headers:{
+        "Content-Type":"application/json"
+    },
+
+body: JSON.stringify({
+
+    area: area,
+
+    activity: activity
+
+})
+
+});
+
+  const recommendation = await response.json();
+
+  console.log("Recommended folder:", recommendation.folder);
+
+  const index = tracks.findIndex(track =>
+      track.group === recommendation.folder
+  );
+
+  console.log("Track index:", index);
+  if (index >= 0) {
+    loadTrack(index, true);
+}
+
+}
+
 selector.addEventListener("change", () => {
   if (selector.value !== "") {
     loadTrack(Number(selector.value), true);
@@ -234,3 +270,16 @@ audio.addEventListener("error", () => {
 });
 
 loadLibrary();
+
+window.addEventListener("areaChanged", () => {
+
+    const context = window.getCurrentContext();
+
+    console.log(context);
+
+    requestRecommendation(
+        context.area,
+        context.activity
+    );
+
+});
