@@ -15,6 +15,7 @@ const nextButton = document.querySelector("#next-button");
 const playIcon = document.querySelector("#play-icon");
 const recInfo = document.querySelector("#recInfo");
 const aiDebug = document.querySelector("#aiDebug");
+const libraryDebug = document.querySelector("#libraryDebug");
 const queueInfo = document.querySelector("#queueInfo");
 
 const PLAY_ICON = "M8 5v14l11-7z";
@@ -144,6 +145,117 @@ function fallbackRanking(area, activity, night) {
 }
 
 
+// ---------------------------------------------------------------------------
+// Folder matching.
+//
+// Two separate things used to break this, and both are handled here.
+//
+// 1. Depth. track.group is the full path under usa-1, so a song stored at
+//    usa-1/General/Walking/Chill/song.mp3 has the group "General/Walking/Chill".
+//    A track therefore belongs to a folder if its group IS that folder or sits
+//    anywhere beneath it. The slash boundary is what stops "General/Resting"
+//    from also swallowing "General/Resting (Night)".
+//
+// 2. Spacing. The library on disk uses "General/Walking (Night)" with a space,
+//    while the allowed list spells it "General/Walking(Night)". Comparing those
+//    character by character failed, the folder looked empty, and it was dropped
+//    from the ranked list. Both sides are now stripped of all whitespace before
+//    comparing, so spacing and capitalisation no longer matter. None of the
+//    nineteen allowed names collide once whitespace is removed, so this cannot
+//    cause a false match.
+// ---------------------------------------------------------------------------
+
+function normalizeFolderKey(value) {
+  return String(value || "").toLowerCase().replace(/\s+/g, "");
+}
+
+function tracksInFolder(folder) {
+  const target = normalizeFolderKey(folder);
+  if (target === "") return [];
+  const prefix = target + "/";
+  const indices = [];
+
+  tracks.forEach((track, index) => {
+    const g = normalizeFolderKey(track.group);
+    if (g === target || g.startsWith(prefix)) indices.push(index);
+  });
+
+  return indices;
+}
+
+// Startup diagnostic. Tells you immediately which of the nineteen folders can
+// actually be chosen, which are empty, and where the real folder name on disk
+// differs from the name the app uses.
+function reportLibrary() {
+  if (!libraryDebug) return;
+
+  if (tracks.length === 0) {
+    libraryDebug.textContent = "No tracks loaded.";
+    return;
+  }
+
+  const reachable = new Set();
+  const lines = [];
+  let emptyCount = 0;
+  let renamedCount = 0;
+
+  ALLOWED_FOLDERS.forEach((folder) => {
+    const indices = tracksInFolder(folder);
+    indices.forEach((i) => reachable.add(i));
+    const count = String(indices.length).padStart(3, " ");
+
+    if (indices.length === 0) {
+      emptyCount += 1;
+      lines.push(`${count}  ${folder}   <-- EMPTY, can never be chosen`);
+      return;
+    }
+
+    // Show the real names on disk when they are spelled differently.
+    const actual = [];
+    indices.forEach((i) => {
+      const g = tracks[i].group;
+      if (!actual.includes(g)) actual.push(g);
+    });
+
+    const exact = actual.length === 1 && actual[0] === folder;
+    if (exact) {
+      lines.push(`${count}  ${folder}`);
+    } else {
+      renamedCount += 1;
+      lines.push(`${count}  ${folder}   [on disk: ${actual.sort().join(" , ")}]`);
+    }
+  });
+
+  const orphanGroups = [];
+  tracks.forEach((track, index) => {
+    if (!reachable.has(index) && !orphanGroups.includes(track.group)) {
+      orphanGroups.push(track.group);
+    }
+  });
+
+  const header = [
+    `${tracks.length} tracks loaded, ${reachable.size} reachable by the 19 allowed folders`,
+    emptyCount === 0
+      ? "every allowed folder has at least one track"
+      : `${emptyCount} allowed folder(s) are empty`,
+    renamedCount === 0
+      ? "every folder name matches exactly"
+      : `${renamedCount} folder(s) matched by ignoring spacing or depth`,
+    "",
+  ];
+
+  const footerLines = [""];
+  if (orphanGroups.length === 0) {
+    footerLines.push("no unreachable track folders");
+  } else {
+    footerLines.push("UNREACHABLE track folders (no allowed folder covers these):");
+    orphanGroups.sort().forEach((g) => footerLines.push("   " + g));
+  }
+
+  libraryDebug.textContent = header.concat(lines).concat(footerLines).join("\n");
+}
+
+
 // Audio graph. iOS Safari ignores the volume property of an audio element,
 // so fading has to go through a Web Audio gain node instead. If Web Audio is
 // unavailable we quietly fall back to stepping volume, which works elsewhere.
@@ -249,15 +361,19 @@ function shuffled(values) {
   return copy;
 }
 
-function buildQueue(folders) {
+// Build one queue from the already-resolved folders, shuffling inside each
+// folder and never letting the same track appear twice.
+function buildQueue(resolved) {
   const indices = [];
+  const seen = new Set();
 
-  folders.forEach((folder) => {
-    const inFolder = [];
-    tracks.forEach((track, index) => {
-      if (track.group === folder) inFolder.push(index);
+  resolved.forEach((entry) => {
+    shuffled(entry.indices).forEach((index) => {
+      if (!seen.has(index)) {
+        seen.add(index);
+        indices.push(index);
+      }
     });
-    shuffled(inFolder).forEach((index) => indices.push(index));
   });
 
   return indices;
@@ -473,29 +589,42 @@ async function loadLibrary() {
     populateSelector();
     setControlsEnabled(true);
     setStatus(`${tracks.length} tracks available`);
+    reportLibrary();
   } catch (error) {
     selector.replaceChildren(new Option("Music library unavailable", ""));
     setStatus("Could not read tracks.json. Regenerate it with the tools script and redeploy.", "error");
+    if (libraryDebug) libraryDebug.textContent = "tracks.json could not be read: " + error.message;
     console.error(error);
   }
 }
 
-// Apply a ranked list of folders. If the top folder is the one already
-// playing, the music is deliberately left alone and only the queue behind it
-// is rebuilt, so the same song is never restarted.
+// Apply a ranked list of folders. If the top folder that actually has music is
+// the one already playing, the music is left alone and only the queue behind
+// it is rebuilt, so the same song is never restarted.
 async function applyRecommendation(folders, sourceLabel) {
-  const playable = folders.filter((folder) => tracks.some((track) => track.group === folder));
+  const resolved = [];
+  const emptyFolders = [];
 
-  if (playable.length === 0) {
-    setRecInfo(`${sourceLabel} chose ${folders.join(", ")}, but no tracks exist in those folders.`);
-    return { applied: false, kept: false, playable };
+  folders.forEach((folder) => {
+    const indices = tracksInFolder(folder);
+    if (indices.length > 0) {
+      resolved.push({ folder, indices });
+    } else {
+      emptyFolders.push(folder);
+    }
+  });
+
+  if (resolved.length === 0) {
+    setRecInfo(`${sourceLabel} chose ${folders.join(", ")}, but none of those folders contain tracks.`);
+    return { applied: false, kept: false, playable: [], emptyFolders };
   }
 
+  const playable = resolved.map((entry) => entry.folder);
   const sameTopFolder = queueFolders.length > 0 && queueFolders[0] === playable[0];
   const stillPlaying = currentTrackIndex !== -1 && !audio.paused;
 
   queueFolders = playable;
-  queue = buildQueue(playable);
+  queue = buildQueue(resolved);
 
   if (sameTopFolder && stillPlaying) {
     const position = queue.indexOf(currentTrackIndex);
@@ -507,12 +636,12 @@ async function applyRecommendation(folders, sourceLabel) {
     }
     setRecInfo(`${sourceLabel}: ${playable.join(" → ")} (same folder, kept playing)`);
     updateQueueInfo();
-    return { applied: true, kept: true, playable };
+    return { applied: true, kept: true, playable, emptyFolders };
   }
 
   setRecInfo(`${sourceLabel}: ${playable.join(" → ")}`);
   await playQueuePos(0, true);
-  return { applied: true, kept: false, playable };
+  return { applied: true, kept: false, playable, emptyFolders };
 }
 
 async function requestRecommendation(context) {
@@ -544,14 +673,17 @@ async function requestRecommendation(context) {
     const bodyText = await response.text();
 
     if (!response.ok) {
+      const outcome = await applyRecommendation(backup, `Offline rule (HTTP ${response.status})`);
       setAiDebug(header.concat([
         `FAILED with HTTP ${response.status}`,
         response.status === 404
           ? "the function is not deployed at /.netlify/functions/recommend"
           : bodyText.slice(0, 300),
-        `using local fallback: ${backup.join(" → ")}`,
+        `local fallback: ${backup.join(" → ")}`,
+        outcome.emptyFolders.length
+          ? `dropped as empty: ${outcome.emptyFolders.join(", ")}`
+          : "no folder was dropped as empty",
       ]));
-      await applyRecommendation(backup, `Offline rule (HTTP ${response.status})`);
       return;
     }
 
@@ -564,7 +696,11 @@ async function requestRecommendation(context) {
       `model: ${data.model || "(not called)"}`,
       `raw model reply: ${data.raw === null || data.raw === undefined ? "(none)" : JSON.stringify(data.raw)}`,
       `how it was resolved: ${data.detail}`,
-      `ranked folders: ${folders.join(" → ")}`,
+      `ranked folders requested: ${folders.join(" → ")}`,
+      outcome.emptyFolders.length
+        ? `DROPPED, contain no tracks: ${outcome.emptyFolders.join(", ")}`
+        : "no folder was dropped as empty",
+      `folders actually used: ${outcome.playable.length ? outcome.playable.join(" → ") : "(none)"}`,
       `source: ${data.source}`,
       `web audio fading: ${webAudioReady ? "on" : "off, using element volume"}`,
       outcome.kept
@@ -575,11 +711,14 @@ async function requestRecommendation(context) {
     ]));
   } catch (error) {
     console.error(error);
+    const outcome = await applyRecommendation(backup, "Offline rule (network error)");
     setAiDebug(header.concat([
       `network error: ${error.message}`,
-      `using local fallback: ${backup.join(" → ")}`,
+      `local fallback: ${backup.join(" → ")}`,
+      outcome.emptyFolders.length
+        ? `dropped as empty: ${outcome.emptyFolders.join(", ")}`
+        : "no folder was dropped as empty",
     ]));
-    await applyRecommendation(backup, "Offline rule (network error)");
   }
 }
 

@@ -1011,21 +1011,31 @@ function stopAll(){
 
 
 // MAP
+//
+// The polygons were never actually missing. They were being drawn at zoom 15,
+// where the whole campus is only ~167 px wide, so each building was a handful
+// of pixels on a busy tile layer. Three things are fixed here: the fit is much
+// tighter, fitting turns following off so the next GPS fix cannot pan away
+// again, and the outlines are heavy enough to read on a phone.
 
-var map = L.map('map').setView([35.38757, 139.42723], 16);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+var map = null;
+var mapReady = false;
+var mapError = "";
 
 var posMarker = null;
 var accCircle = null;
+var areaGroup = null;
+var campusOutline = null;
 var polyLayers = [];
 var followMe = true;
+
+var CAMPUS_BOUNDS = null;
+var CAMPUS_FOLLOW_BOUNDS = null;
 
 function latlngs(area){
   return area.corners.map(function(c){ return [c.lat, c.lng]; });
 }
 
-//Bounding box of every mapped area, used both for the fit button and to decide
-//whether following your position would drag the view away from campus.
 function campusBounds(){
   var points = [];
   for (var i = 0; i < areas.length; i++){
@@ -1036,49 +1046,143 @@ function campusBounds(){
   return L.latLngBounds(points);
 }
 
-var CAMPUS_BOUNDS = campusBounds();
-var CAMPUS_FOLLOW_BOUNDS = CAMPUS_BOUNDS.pad(1.0);
+function initMap(){
+  try {
+    if (typeof L === 'undefined'){
+      mapError = 'Leaflet never loaded. The unpkg script tag was blocked or failed.';
+      updateMapInfo();
+      return;
+    }
 
-function fitCampus(){
-  map.fitBounds(CAMPUS_BOUNDS.pad(0.1));
-  updateMapInfo();
-}
+    var host = document.getElementById('map');
+    if (!host){
+      mapError = 'No element with id "map" exists in the page.';
+      updateMapInfo();
+      return;
+    }
 
-//Draw areas, red if you are inside them.
-//The outlines are deliberately heavier than before, because a thin blue line
-//at low opacity is very hard to see over street tiles on a phone in daylight.
-function redrawAreas(insideSet){
-  for (var i = 0; i < polyLayers.length; i++){ map.removeLayer(polyLayers[i]); }
-  polyLayers = [];
-  insideSet = insideSet || {};
+    map = L.map('map').setView([35.38873, 139.42860], 16);
 
-  for (var j = 0; j < areas.length; j++){
-    var hit = insideSet[j] === true;
-    var poly = L.polygon(latlngs(areas[j]), {
-      color: hit ? '#dc2626' : '#1d4ed8',
-      weight: hit ? 4 : 3,
-      opacity: 1,
-      fillColor: hit ? '#dc2626' : '#3b82f6',
-      fillOpacity: hit ? 0.45 : 0.22
-    }).addTo(map).bindTooltip(areas[j].label, { sticky: true });
-    polyLayers.push(poly);
+    //Slightly faded tiles, so the blue outlines stand out instead of competing
+    //with every road and building line underneath them.
+    var tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+    }).addTo(map);
+    if (tiles.getContainer()) tiles.getContainer().style.opacity = 0.75;
+
+    areaGroup = L.featureGroup().addTo(map);
+
+    CAMPUS_BOUNDS = campusBounds();
+
+    //Tight enough that standing a few streets away does not drag the view off
+    //campus, which is what made the boxes appear to be missing.
+    CAMPUS_FOLLOW_BOUNDS = CAMPUS_BOUNDS.pad(0.25);
+
+    buildAreaLayers();
+
+    mapReady = true;
+    map.on('moveend zoomend', updateMapInfo);
+
+  } catch (e){
+    mapError = 'Map failed to start: ' + (e && e.message ? e.message : e);
   }
 
   updateMapInfo();
 }
 
-//Draw current position
+//Built once, then only restyled.
+function buildAreaLayers(){
+  polyLayers = [];
+  areaGroup.clearLayers();
+
+  //A dashed box around the whole campus, so even when zoomed out you can see
+  //where the zones are rather than hunting for them.
+  campusOutline = L.rectangle(CAMPUS_BOUNDS, {
+    color: '#0f766e',
+    weight: 2,
+    dashArray: '6 6',
+    fill: false,
+    interactive: false
+  }).addTo(areaGroup);
+
+  for (var j = 0; j < areas.length; j++){
+    var poly = L.polygon(latlngs(areas[j]), {
+      color: '#1d4ed8',
+      weight: 4,
+      opacity: 1,
+      fillColor: '#3b82f6',
+      fillOpacity: 0.4
+    });
+    poly.bindTooltip(areas[j].label, { sticky: true });
+    poly.addTo(areaGroup);
+    polyLayers.push(poly);
+  }
+}
+
+function redrawAreas(insideSet){
+  if (!mapReady || polyLayers.length === 0) return;
+  insideSet = insideSet || {};
+
+  for (var i = 0; i < polyLayers.length; i++){
+    var hit = insideSet[i] === true;
+    polyLayers[i].setStyle({
+      color: hit ? '#b91c1c' : '#1d4ed8',
+      weight: hit ? 6 : 4,
+      opacity: 1,
+      fillColor: hit ? '#dc2626' : '#3b82f6',
+      fillOpacity: hit ? 0.6 : 0.4
+    });
+  }
+
+  updateMapInfo();
+}
+
+//Fit the campus as tightly as the container allows. Padding used to be 15%,
+//which inflated the box by a third and cost a whole zoom level.
+function fitCampus(attempt){
+  if (!mapReady) return;
+  attempt = attempt || 0;
+
+  var host = document.getElementById('map');
+  if (!host || host.clientWidth < 50 || host.clientHeight < 50){
+    if (attempt < 20) setTimeout(function(){ fitCampus(attempt + 1); }, 250);
+    return;
+  }
+
+  map.invalidateSize();
+  map.fitBounds(CAMPUS_BOUNDS, { padding: [12, 12], maxZoom: 18 });
+  updateMapInfo();
+}
+
+//Fitting has to stop following, otherwise the next GPS fix pans straight back
+//to your marker a second later and the boxes seem to disappear again.
+function fitCampusManual(){
+  followMe = false;
+  var followBtn = document.getElementById('followMeBtn');
+  if (followBtn) followBtn.textContent = 'Follow me: off';
+  fitCampus(0);
+}
+
 function drawPosition(){
-  if (!lastPosition) return;
+  if (!mapReady || !lastPosition) return;
+
   var ll = [lastPosition.lat, lastPosition.lng];
   if (posMarker) map.removeLayer(posMarker);
   if (accCircle) map.removeLayer(accCircle);
-  posMarker = L.marker(ll).addTo(map).bindTooltip('You');
-  accCircle = L.circle(ll, { radius: lastPosition.accuracy, weight: 1, fillOpacity: 0.1 }).addTo(map);
 
-  //Only follow you while you are near campus. Following unconditionally is what
-  //pushed the area boxes off screen when testing away from SFC.
-  if (followMe && CAMPUS_FOLLOW_BOUNDS.contains(L.latLng(ll))){
+  posMarker = L.marker(ll).addTo(map).bindTooltip('You');
+
+  //A poor fix can report kilometres of accuracy, and a circle that large
+  //covers every zone on the map, so the drawn radius is capped.
+  var shown = Math.min(lastPosition.accuracy, 120);
+  accCircle = L.circle(ll, {
+    radius: shown,
+    weight: 1,
+    color: '#0f766e',
+    fillOpacity: 0.06
+  }).addTo(map);
+
+  if (followMe && CAMPUS_FOLLOW_BOUNDS && CAMPUS_FOLLOW_BOUNDS.contains(L.latLng(ll))){
     map.setView(ll);
   }
 
@@ -1089,14 +1193,48 @@ function updateMapInfo(){
   var node = document.getElementById('mapInfo');
   if (!node) return;
 
+  if (mapError){
+    node.textContent = 'MAP ERROR: ' + mapError;
+    return;
+  }
+
+  if (!mapReady){
+    node.textContent = 'Map is still starting up.';
+    return;
+  }
+
+  var host = document.getElementById('map');
   var centre = map.getCenter();
+  var view = map.getBounds();
+
+  //How many zones are actually inside what you can see right now. This is the
+  //number that matters, not how many exist.
+  var visible = 0;
+  for (var i = 0; i < polyLayers.length; i++){
+    if (view.intersects(polyLayers[i].getBounds())) visible++;
+  }
+
+  //Roughly how wide the campus is on screen, in pixels. Under about 200 the
+  //individual buildings are too small to pick out.
+  var widthPx = 0;
+  try {
+    var west = map.latLngToContainerPoint(L.latLng(CAMPUS_BOUNDS.getNorth(), CAMPUS_BOUNDS.getWest()));
+    var east = map.latLngToContainerPoint(L.latLng(CAMPUS_BOUNDS.getNorth(), CAMPUS_BOUNDS.getEast()));
+    widthPx = Math.round(Math.abs(east.x - west.x));
+  } catch (e){ widthPx = 0; }
+
   var nearCampus = lastPosition
     ? CAMPUS_FOLLOW_BOUNDS.contains(L.latLng([lastPosition.lat, lastPosition.lng]))
     : false;
 
   var lines = [
-    'area boxes drawn: ' + polyLayers.length + ' of ' + areas.length,
-    'map centre: ' + centre.lat.toFixed(5) + ', ' + centre.lng.toFixed(5) + ' at zoom ' + map.getZoom(),
+    'zones created: ' + polyLayers.length + ' of ' + areas.length +
+      ', visible in this view: ' + visible,
+    'campus is ' + widthPx + ' px wide on screen' +
+      (widthPx > 0 && widthPx < 200 ? '  <-- too small, tap Show all campus areas' : ''),
+    'map container: ' + (host ? host.clientWidth + ' x ' + host.clientHeight : 'missing') + ' px',
+    'map centre: ' + centre.lat.toFixed(5) + ', ' + centre.lng.toFixed(5) +
+      ' at zoom ' + map.getZoom(),
     'your position is ' + (lastPosition ? (nearCampus ? 'near campus' : 'far from campus') : 'not fixed yet'),
     'follow me: ' + (followMe ? 'on' : 'off')
   ];
@@ -1109,23 +1247,23 @@ function setupMapButtons(){
   var followBtn = document.getElementById('followMeBtn');
 
   if (fitBtn){
-    fitBtn.addEventListener('click', fitCampus);
+    fitBtn.addEventListener('click', fitCampusManual);
+  } else {
+    mapError = mapError || 'The map buttons are missing, so index.html was not updated.';
   }
 
   if (followBtn){
     followBtn.addEventListener('click', function(){
       followMe = !followMe;
       followBtn.textContent = 'Follow me: ' + (followMe ? 'on' : 'off');
+      if (followMe) drawPosition();
       updateMapInfo();
     });
   }
-
-  map.on('moveend zoomend', updateMapInfo);
 }
 
-//Phones frequently lay the page out after Leaflet has measured the container,
-//which leaves the map sized wrongly until it is told to remeasure.
 function refreshMapSize(){
+  if (!mapReady) return;
   map.invalidateSize();
   updateMapInfo();
 }
@@ -1134,13 +1272,15 @@ function refreshMapSize(){
 //Initialize
 setText('windowSize', NUM_DATA_PER_FRAME);
 setupSettingsInputs();
+initMap();
 setupMapButtons();
 redrawAreas();
-fitCampus();
+fitCampus(0);
 updateContextDisplay();
 updateActivityDebug();
 
 setTimeout(refreshMapSize, 300);
 setTimeout(refreshMapSize, 1200);
+setTimeout(function(){ fitCampus(0); }, 1500);
 window.addEventListener('resize', refreshMapSize);
-window.addEventListener('orientationchange', function(){ setTimeout(refreshMapSize, 300); });
+window.addEventListener('orientationchange', function(){ setTimeout(refreshMapSize, 400); });
