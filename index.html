@@ -30,6 +30,25 @@
     <p id="context" class="context-value">no area / unknown</p>
     <p id="posInfo" class="muted"></p>
     <p id="recInfo" class="muted">No recommendation yet.</p>
+    <p id="stabilityInfo" class="muted"></p>
+
+    <div class="settings">
+      <div class="setting-row">
+        <label for="decisionWindowInput">Decision window (seconds)</label>
+        <input id="decisionWindowInput" type="number" inputmode="numeric"
+               min="5" max="120" step="1" value="10">
+      </div>
+      <div class="setting-row">
+        <label for="cooldownInput">Minimum gap between song changes (seconds)</label>
+        <input id="cooldownInput" type="number" inputmode="numeric"
+               min="10" max="1800" step="5" value="180">
+      </div>
+      <p class="muted">
+        The app takes the majority area and majority activity over the decision window,
+        then changes music only if the winner differs from the last one and the gap has passed.
+        Both values are remembered on this phone.
+      </p>
+    </div>
   </section>
 
   <section class="card player-card" aria-label="Music player">
@@ -51,7 +70,7 @@
       <p class="artist" id="track-group">Waiting...</p>
     </div>
 
-    <audio id="audio-player" preload="metadata" playsinline></audio>
+    <audio id="audio-player" preload="metadata" playsinline crossorigin="anonymous"></audio>
 
     <div class="progress-container">
       <span class="time" id="elapsed-time">0:00</span>
@@ -80,6 +99,8 @@
       </button>
     </div>
 
+    <p id="queueInfo" class="muted">Queue is empty.</p>
+
     <div class="library-picker">
       <label for="track-selector">Choose a track manually</label>
       <select id="track-selector" disabled>
@@ -92,11 +113,19 @@
 
   <section class="card">
     <h2>Map</h2>
+    <div class="map-buttons">
+      <button id="fitCampusBtn" class="small-btn" type="button">Show all campus areas</button>
+      <button id="followMeBtn" class="small-btn" type="button">Follow me: on</button>
+    </div>
     <div id="map"></div>
+    <p id="mapInfo" class="muted"></p>
   </section>
 
   <details class="card">
     <summary>Debug details</summary>
+
+    <h3>Activity detection</h3>
+    <div id="activityDebug" class="features-box">Not running.</div>
 
     <h3>Recommendation debug (this is the real AI call)</h3>
     <div id="aiDebug" class="prompt-box">No recommendation request yet.</div>

@@ -220,15 +220,128 @@ function evaluatePosition(){
 
   redrawAreas(insideSet);
   updateContextDisplay();
-  maybeNotifyContextChange();
 }
 
-//Exposed at the top level so the music player can read it at any time,
-//even before the very first GPS fix arrives.
+
+// Adjustable settings, saved on this phone so they survive a reload.
+
+var DECISION_WINDOW_KEY = 'pumbas.decisionWindowSeconds';
+var COOLDOWN_KEY = 'pumbas.cooldownSeconds';
+
+var DECISION_WINDOW_DEFAULT = 10;
+var DECISION_WINDOW_MIN = 5;
+var DECISION_WINDOW_MAX = 120;
+
+var COOLDOWN_DEFAULT = 180;
+var COOLDOWN_MIN = 10;
+var COOLDOWN_MAX = 1800;
+
+function clampNumber(value, min, max, fallback){
+  var n = Number(value);
+  if (!isFinite(n)) return fallback;
+  n = Math.round(n);
+  if (n < min) return min;
+  if (n > max) return max;
+  return n;
+}
+
+function readStored(key, min, max, fallback){
+  try {
+    var raw = window.localStorage.getItem(key);
+    if (raw === null) return fallback;
+    return clampNumber(raw, min, max, fallback);
+  } catch (e){
+    return fallback;
+  }
+}
+
+function writeStored(key, value){
+  try {
+    window.localStorage.setItem(key, String(value));
+  } catch (e){
+    //Private browsing can refuse this. It only costs us persistence.
+  }
+}
+
+function getDecisionWindowMs(){
+  var node = document.getElementById('decisionWindowInput');
+  if (!node) return DECISION_WINDOW_DEFAULT * 1000;
+  return clampNumber(node.value, DECISION_WINDOW_MIN, DECISION_WINDOW_MAX,
+                     DECISION_WINDOW_DEFAULT) * 1000;
+}
+
+function getCooldownMs(){
+  var node = document.getElementById('cooldownInput');
+  if (!node) return COOLDOWN_DEFAULT * 1000;
+  return clampNumber(node.value, COOLDOWN_MIN, COOLDOWN_MAX, COOLDOWN_DEFAULT) * 1000;
+}
+
+function setupSettingsInputs(){
+  var windowInput = document.getElementById('decisionWindowInput');
+  var cooldownInput = document.getElementById('cooldownInput');
+
+  if (windowInput){
+    windowInput.value = readStored(DECISION_WINDOW_KEY, DECISION_WINDOW_MIN,
+                                   DECISION_WINDOW_MAX, DECISION_WINDOW_DEFAULT);
+    windowInput.addEventListener('change', function(){
+      var clean = clampNumber(windowInput.value, DECISION_WINDOW_MIN,
+                              DECISION_WINDOW_MAX, DECISION_WINDOW_DEFAULT);
+      windowInput.value = clean;
+      writeStored(DECISION_WINDOW_KEY, clean);
+      updateStabilityDisplay();
+    });
+  }
+
+  if (cooldownInput){
+    cooldownInput.value = readStored(COOLDOWN_KEY, COOLDOWN_MIN, COOLDOWN_MAX, COOLDOWN_DEFAULT);
+    cooldownInput.addEventListener('change', function(){
+      var clean = clampNumber(cooldownInput.value, COOLDOWN_MIN, COOLDOWN_MAX, COOLDOWN_DEFAULT);
+      cooldownInput.value = clean;
+      writeStored(COOLDOWN_KEY, clean);
+      updateStabilityDisplay();
+    });
+  }
+}
+
+
+// Time description, worked out on the phone rather than on the server,
+// because Netlify runs in UTC and would otherwise guess your timezone wrongly.
+
+function describeTimeBand(hour){
+  if (hour < 5)  return "late night";
+  if (hour < 11) return "morning";
+  if (hour < 14) return "midday";
+  if (hour < 17) return "afternoon";
+  if (hour < 20) return "evening";
+  return "night";
+}
+
+function timeInfo(){
+  var days = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+  var d = new Date();
+  var hour = d.getHours();
+  var hh = hour < 10 ? "0" + hour : "" + hour;
+  var mm = d.getMinutes() < 10 ? "0" + d.getMinutes() : "" + d.getMinutes();
+
+  return {
+    hour: hour,
+    minute: d.getMinutes(),
+    weekday: days[d.getDay()],
+    weekend: (d.getDay() === 0 || d.getDay() === 6),
+    band: describeTimeBand(hour),
+    isNight: (hour >= 19 || hour < 5),
+    local: hh + ":" + mm
+  };
+}
+
+//Exposed at the top level so the music player can read it at any time.
+//It reports the voted values, not the raw instantaneous ones, so the request
+//that goes to the model matches the decision that triggered it.
 window.getCurrentContext = function(){
   return {
-    area: currentAreas[0] || null,
-    activity: currentActivity
+    area: lastNotifiedArea,
+    activity: lastNotifiedActivity,
+    time: timeInfo()
   };
 };
 
@@ -238,7 +351,10 @@ window.getCurrentContext = function(){
 
 var NUM_DATA_PER_FRAME = 200; //samples per classification window (~3.4 s at 59 Hz)
 var SLIDE = 50;               //how many old samples to drop after each classification
-var VOTE_LENGTH = 5;          //majority vote over the last N classifications
+
+//Short inner vote. Its only job is to knock out single-window spikes.
+//The real smoothing is the adjustable decision window further down.
+var VOTE_WINDOW_MS = 3000;
 
 var magdata = [];   //acceleration magnitudes
 var timedata = [];  //event timestamps in ms, so we can measure the true sample rate
@@ -247,9 +363,16 @@ var timedata = [];  //event timestamps in ms, so we can measure the true sample 
 var magMean = 0, magStd = 0, magMad = 0, magRms = 0;
 var magMax = 0, magRange = 0, magCrossRate = 0, magPeakRate = 0;
 
-var voteBuffer = [];
+var voteBuffer = [];   // { t, label }
+var lastVoteTally = {};
 var currentActivity = "unknown";
 var currentActivityRaw = "unknown";
+
+//Statistics so you can see how often the label actually moves
+var classificationCount = 0;
+var classificationTimes = [];
+var activitySwitchCount = 0;
+var lastSwitchTime = 0;
 
 var motionListening = false;
 var accelSource = "none";
@@ -268,6 +391,11 @@ function startDeviceMotion(){
   magdata = [];
   timedata = [];
   voteBuffer = [];
+  lastVoteTally = {};
+  classificationCount = 0;
+  classificationTimes = [];
+  activitySwitchCount = 0;
+  lastSwitchTime = 0;
   gravity = { x: 0, y: 0, z: 0 };
   gravitySamples = 0;
   if (uiTimer === null) uiTimer = setInterval(refreshFeatureUI, 300);
@@ -320,11 +448,23 @@ function handleAcceleration(ev){
 
   if (magdata.length >= NUM_DATA_PER_FRAME){
     featureExtraction();
+
+    var previousActivity = currentActivity;
+
     currentActivityRaw = smooth(classifyRaw());
     currentActivity = toMainClass(currentActivityRaw);
+
+    classificationCount++;
+    classificationTimes.push(Date.now());
+    if (classificationTimes.length > 30) classificationTimes.shift();
+
+    if (previousActivity !== currentActivity && previousActivity !== "unknown"){
+      activitySwitchCount++;
+      lastSwitchTime = Date.now();
+    }
+
     recordContext();
     updateContextDisplay();
-    maybeNotifyContextChange();
 
     //Slide the window instead of clearing it, so we keep classifying continuously
     magdata = magdata.slice(SLIDE);
@@ -337,6 +477,7 @@ function refreshFeatureUI(){
   setText('accelSource', accelSource);
   setText('sampleCount', magdata.length);
   if (magdata.length > 1) featureExtraction();
+  updateActivityDebug();
 }
 
 function featureExtraction(){
@@ -433,18 +574,26 @@ function classifyRaw(){
   }
 }
 
-//Majority vote over the last few windows so the label does not flicker
+//Short majority vote, measured in real time rather than in a fixed
+//number of windows, so it behaves the same on every phone.
 function smooth(raw){
-  voteBuffer.push(raw);
-  if (voteBuffer.length > VOTE_LENGTH) voteBuffer.shift();
+  var now = Date.now();
+  voteBuffer.push({ t: now, label: raw });
+
+  var cutoff = now - VOTE_WINDOW_MS;
+  while (voteBuffer.length && voteBuffer[0].t < cutoff){
+    voteBuffer.shift();
+  }
 
   var tally = {};
   var best = raw, bestCount = 0;
   for (var i = 0; i < voteBuffer.length; i++){
-    var label = voteBuffer[i];
+    var label = voteBuffer[i].label;
     tally[label] = (tally[label] || 0) + 1;
     if (tally[label] > bestCount){ bestCount = tally[label]; best = label; }
   }
+
+  lastVoteTally = tally;
   return best;
 }
 
@@ -457,6 +606,45 @@ function toMainClass(raw){
     case "squating":  return "exercise";
     default:          return "unknown";
   }
+}
+
+//Shows how fast the classifier is running and how stable it actually is
+function updateActivityDebug(){
+  var node = document.getElementById('activityDebug');
+  if (!node) return;
+
+  if (!motionListening){
+    node.textContent = 'Motion sensing is not running.';
+    return;
+  }
+
+  var rate = 0;
+  if (classificationTimes.length > 1){
+    var span = (classificationTimes[classificationTimes.length - 1] - classificationTimes[0]) / 1000;
+    if (span > 0) rate = (classificationTimes.length - 1) / span;
+  }
+
+  var parts = [];
+  for (var key in lastVoteTally){
+    if (Object.prototype.hasOwnProperty.call(lastVoteTally, key)){
+      parts.push(key + ' x' + lastVoteTally[key]);
+    }
+  }
+
+  var sinceSwitch = lastSwitchTime === 0
+    ? 'no switch yet'
+    : Math.round((Date.now() - lastSwitchTime) / 1000) + ' s ago';
+
+  var lines = [
+    'classifications: ' + classificationCount,
+    'classification rate: ' + rate.toFixed(2) + ' per second',
+    'inner vote window: ' + (VOTE_WINDOW_MS / 1000) + ' s, holding ' + voteBuffer.length + ' votes',
+    'inner vote breakdown: ' + (parts.length ? parts.join(', ') : 'empty'),
+    'raw label: ' + currentActivityRaw + '  ->  smoothed: ' + currentActivity,
+    'label switches since start: ' + activitySwitchCount + ' (last ' + sinceSwitch + ')'
+  ];
+
+  node.textContent = lines.join('\n');
 }
 
 
@@ -475,34 +663,168 @@ function updateContextDisplay(){
 }
 
 
-// Change detection: this is what actually triggers a new recommendation.
-// Without this the music player would never be told that anything happened.
+// Decision layer.
+// The current area and activity are sampled on a fixed timer, so the vote is
+// weighted by time rather than by how often each sensor happens to fire.
+// The winner of each is taken independently, which handles the case where the
+// area jitters while the activity is steady, or the other way round.
 
-var CONTEXT_COOLDOWN_MS = 30000;  //never ask for a new song more often than this
+var CONTEXT_SAMPLE_MS = 500;
+var NO_AREA_KEY = "(no area)";
+
+var contextSamples = [];      // { t, area, activity }
+var contextSampleTimer = null;
+
+var lastAreaTally = {};
+var lastActivityTally = {};
+var lastAreaWinner = null;
+var lastActivityWinner = null;
+
 var lastNotifiedArea = null;
 var lastNotifiedActivity = null;
 var lastNotifyTime = 0;
+var notifyCount = 0;
 
-function maybeNotifyContextChange(){
+function tallyWinner(values, preferredKey){
+  var tally = {};
+  for (var i = 0; i < values.length; i++){
+    var key = values[i];
+    tally[key] = (tally[key] || 0) + 1;
+  }
+
+  var best = null, bestCount = -1;
+  for (var k in tally){
+    if (!Object.prototype.hasOwnProperty.call(tally, k)) continue;
+    if (tally[k] > bestCount){
+      bestCount = tally[k];
+      best = k;
+    } else if (tally[k] === bestCount && k === preferredKey){
+      //A tie resolves in favour of whatever we are already playing,
+      //so a fifty-fifty split does not flap between two folders.
+      best = k;
+    }
+  }
+
+  return { winner: best, tally: tally, count: bestCount, total: values.length };
+}
+
+function sampleContext(){
   if (!running) return;
 
-  var area = currentAreas[0] || null;
-  var activity = currentActivity;
+  var now = Date.now();
+  contextSamples.push({
+    t: now,
+    area: currentAreas[0] || null,
+    activity: currentActivity
+  });
 
-  //Wait until the classifier has actually decided something
-  if (activity === "unknown") return;
+  var windowMs = getDecisionWindowMs();
+  var cutoff = now - windowMs;
+  while (contextSamples.length && contextSamples[0].t < cutoff){
+    contextSamples.shift();
+  }
 
-  //Nothing has changed, so there is nothing to react to
-  if (area === lastNotifiedArea && activity === lastNotifiedActivity) return;
+  decideContext(windowMs);
+  updateStabilityDisplay();
+}
+
+function decideContext(windowMs){
+  if (contextSamples.length < 3) return;
+
+  //Only decide once the buffer actually covers most of the window, otherwise
+  //the first few seconds after pressing start would vote on almost nothing.
+  var span = contextSamples[contextSamples.length - 1].t - contextSamples[0].t;
+  if (span < windowMs * 0.8) return;
+
+  var areaValues = [];
+  var activityValues = [];
+
+  for (var i = 0; i < contextSamples.length; i++){
+    areaValues.push(contextSamples[i].area === null ? NO_AREA_KEY : contextSamples[i].area);
+    //An unclassified activity should never win the vote, so it is left out
+    //rather than being allowed to outnumber the real labels.
+    if (contextSamples[i].activity !== "unknown"){
+      activityValues.push(contextSamples[i].activity);
+    }
+  }
+
+  var areaResult = tallyWinner(
+    areaValues,
+    lastNotifiedArea === null ? NO_AREA_KEY : lastNotifiedArea
+  );
+  var activityResult = tallyWinner(activityValues, lastNotifiedActivity);
+
+  lastAreaTally = areaResult.tally;
+  lastActivityTally = activityResult.tally;
+
+  lastAreaWinner = areaResult.winner === NO_AREA_KEY ? null : areaResult.winner;
+  lastActivityWinner = activityResult.winner;
+
+  //Nothing usable yet
+  if (lastActivityWinner === null || lastActivityWinner === undefined) return;
+
+  //The winner is the same as the one already playing
+  if (lastAreaWinner === lastNotifiedArea && lastActivityWinner === lastNotifiedActivity) return;
 
   var now = Date.now();
-  if (lastNotifyTime !== 0 && (now - lastNotifyTime) < CONTEXT_COOLDOWN_MS) return;
+  if (lastNotifyTime !== 0 && (now - lastNotifyTime) < getCooldownMs()) return;
 
-  lastNotifiedArea = area;
-  lastNotifiedActivity = activity;
+  lastNotifiedArea = lastAreaWinner;
+  lastNotifiedActivity = lastActivityWinner;
   lastNotifyTime = now;
+  notifyCount++;
 
   window.dispatchEvent(new Event('areaChanged'));
+}
+
+function describeTally(tally){
+  var parts = [];
+  for (var key in tally){
+    if (Object.prototype.hasOwnProperty.call(tally, key)){
+      parts.push(key + ' x' + tally[key]);
+    }
+  }
+  return parts.length ? parts.join(', ') : 'empty';
+}
+
+function updateStabilityDisplay(){
+  var node = document.getElementById('stabilityInfo');
+  if (!node) return;
+
+  if (!running){
+    node.textContent = '';
+    return;
+  }
+
+  var now = Date.now();
+  var windowSeconds = Math.round(getDecisionWindowMs() / 1000);
+  var span = contextSamples.length > 1
+    ? ((contextSamples[contextSamples.length - 1].t - contextSamples[0].t) / 1000)
+    : 0;
+
+  var coolText;
+  if (lastNotifyTime === 0){
+    coolText = 'gap timer idle, ready to change';
+  } else {
+    var remaining = Math.max(0, Math.round((getCooldownMs() - (now - lastNotifyTime)) / 1000));
+    coolText = remaining > 0
+      ? ('next change allowed in ' + remaining + ' s')
+      : 'gap elapsed, ready to change';
+  }
+
+  var lines = [
+    'vote over last ' + windowSeconds + ' s: ' + contextSamples.length +
+      ' samples covering ' + span.toFixed(1) + ' s',
+    'area votes: ' + describeTally(lastAreaTally),
+    'activity votes: ' + describeTally(lastActivityTally),
+    'winner: ' + (lastAreaWinner === null ? 'no area' : lastAreaWinner) +
+      ' / ' + (lastActivityWinner || 'none'),
+    'playing for: ' + (lastNotifiedArea === null ? 'no area' : lastNotifiedArea) +
+      ' / ' + (lastNotifiedActivity || 'none') + ' (' + notifyCount + ' changes)',
+    coolText
+  ];
+
+  node.textContent = lines.join('\n');
 }
 
 
@@ -549,13 +871,10 @@ function summarizeLastMinute(){
   return { activity: best, share: bestCount / recent.length, samples: recent.length };
 }
 
-//Human readable time, e.g. "Monday 14:32"
+//Human readable time, e.g. "Monday 14:32 (afternoon)"
 function describeTime(){
-  var days = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-  var d = new Date();
-  var hh = d.getHours() < 10 ? "0" + d.getHours() : "" + d.getHours();
-  var mm = d.getMinutes() < 10 ? "0" + d.getMinutes() : "" + d.getMinutes();
-  return days[d.getDay()] + " " + hh + ":" + mm;
+  var info = timeInfo();
+  return info.weekday + " " + info.local + " (" + info.band + ")";
 }
 
 //Human readable location
@@ -577,7 +896,7 @@ function describeActivity(activity){
   }
 }
 
-//The template. Edit the wording here and everything downstream follows.
+//The template. This one is display only and is never sent anywhere.
 function buildPrompt(){
   var summary = summarizeLastMinute();
   var percent = Math.round(summary.share * 100);
@@ -626,12 +945,20 @@ function toggleAll(){
 function startAll(){
   setText('warn', '');
   contextHistory = [];
+
+  contextSamples = [];
+  lastAreaTally = {};
+  lastActivityTally = {};
+  lastAreaWinner = null;
+  lastActivityWinner = null;
   lastNotifiedArea = null;
   lastNotifiedActivity = null;
   lastNotifyTime = 0;
+  notifyCount = 0;
 
-  //Mobile browsers only allow audio to start from a real tap, so we unlock the
-  //audio element here, inside the tap, before any automatic recommendation runs.
+  //Mobile browsers only allow audio to start from a real tap, and iOS only
+  //allows the Web Audio graph used for fading to be built from a real tap,
+  //so both happen here inside the button handler.
   if (typeof window.primeAudio === 'function') window.primeAudio();
 
   startWatch();
@@ -652,7 +979,12 @@ function startAll(){
     startDeviceMotion();
   }
 
-  //Fire the prompt every 60 seconds
+  //The decision vote samples on its own clock, independent of the sensors
+  if (contextSampleTimer === null){
+    contextSampleTimer = setInterval(sampleContext, CONTEXT_SAMPLE_MS);
+  }
+
+  //Fire the display prompt every 60 seconds
   if (promptTimer === null){
     promptTimer = setInterval(refreshPrompt, PROMPT_INTERVAL_MS);
   }
@@ -666,11 +998,14 @@ function stopAll(){
   stopWatch();
   stopDeviceMotion();
   if (promptTimer !== null){ clearInterval(promptTimer); promptTimer = null; }
+  if (contextSampleTimer !== null){ clearInterval(contextSampleTimer); contextSampleTimer = null; }
   running = false;
   setText('startBtn', 'Start tracking');
   setText('status', 'Stopped.');
   setText('accelSource', 'none');
   setText('sampleCount', '0');
+  setText('stabilityInfo', '');
+  updateActivityDebug();
 }
 
 
@@ -683,25 +1018,53 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 
 var posMarker = null;
 var accCircle = null;
 var polyLayers = [];
+var followMe = true;
 
 function latlngs(area){
   return area.corners.map(function(c){ return [c.lat, c.lng]; });
 }
 
-//Draw areas, red if you are inside them
+//Bounding box of every mapped area, used both for the fit button and to decide
+//whether following your position would drag the view away from campus.
+function campusBounds(){
+  var points = [];
+  for (var i = 0; i < areas.length; i++){
+    for (var j = 0; j < areas[i].corners.length; j++){
+      points.push([areas[i].corners[j].lat, areas[i].corners[j].lng]);
+    }
+  }
+  return L.latLngBounds(points);
+}
+
+var CAMPUS_BOUNDS = campusBounds();
+var CAMPUS_FOLLOW_BOUNDS = CAMPUS_BOUNDS.pad(1.0);
+
+function fitCampus(){
+  map.fitBounds(CAMPUS_BOUNDS.pad(0.1));
+  updateMapInfo();
+}
+
+//Draw areas, red if you are inside them.
+//The outlines are deliberately heavier than before, because a thin blue line
+//at low opacity is very hard to see over street tiles on a phone in daylight.
 function redrawAreas(insideSet){
   for (var i = 0; i < polyLayers.length; i++){ map.removeLayer(polyLayers[i]); }
   polyLayers = [];
   insideSet = insideSet || {};
+
   for (var j = 0; j < areas.length; j++){
     var hit = insideSet[j] === true;
     var poly = L.polygon(latlngs(areas[j]), {
-      color: hit ? 'red' : 'blue',
-      weight: 2,
-      fillOpacity: hit ? 0.3 : 0.1
-    }).addTo(map).bindTooltip(areas[j].label);
+      color: hit ? '#dc2626' : '#1d4ed8',
+      weight: hit ? 4 : 3,
+      opacity: 1,
+      fillColor: hit ? '#dc2626' : '#3b82f6',
+      fillOpacity: hit ? 0.45 : 0.22
+    }).addTo(map).bindTooltip(areas[j].label, { sticky: true });
     polyLayers.push(poly);
   }
+
+  updateMapInfo();
 }
 
 //Draw current position
@@ -712,11 +1075,72 @@ function drawPosition(){
   if (accCircle) map.removeLayer(accCircle);
   posMarker = L.marker(ll).addTo(map).bindTooltip('You');
   accCircle = L.circle(ll, { radius: lastPosition.accuracy, weight: 1, fillOpacity: 0.1 }).addTo(map);
-  map.setView(ll);
+
+  //Only follow you while you are near campus. Following unconditionally is what
+  //pushed the area boxes off screen when testing away from SFC.
+  if (followMe && CAMPUS_FOLLOW_BOUNDS.contains(L.latLng(ll))){
+    map.setView(ll);
+  }
+
+  updateMapInfo();
+}
+
+function updateMapInfo(){
+  var node = document.getElementById('mapInfo');
+  if (!node) return;
+
+  var centre = map.getCenter();
+  var nearCampus = lastPosition
+    ? CAMPUS_FOLLOW_BOUNDS.contains(L.latLng([lastPosition.lat, lastPosition.lng]))
+    : false;
+
+  var lines = [
+    'area boxes drawn: ' + polyLayers.length + ' of ' + areas.length,
+    'map centre: ' + centre.lat.toFixed(5) + ', ' + centre.lng.toFixed(5) + ' at zoom ' + map.getZoom(),
+    'your position is ' + (lastPosition ? (nearCampus ? 'near campus' : 'far from campus') : 'not fixed yet'),
+    'follow me: ' + (followMe ? 'on' : 'off')
+  ];
+
+  node.textContent = lines.join('\n');
+}
+
+function setupMapButtons(){
+  var fitBtn = document.getElementById('fitCampusBtn');
+  var followBtn = document.getElementById('followMeBtn');
+
+  if (fitBtn){
+    fitBtn.addEventListener('click', fitCampus);
+  }
+
+  if (followBtn){
+    followBtn.addEventListener('click', function(){
+      followMe = !followMe;
+      followBtn.textContent = 'Follow me: ' + (followMe ? 'on' : 'off');
+      updateMapInfo();
+    });
+  }
+
+  map.on('moveend zoomend', updateMapInfo);
+}
+
+//Phones frequently lay the page out after Leaflet has measured the container,
+//which leaves the map sized wrongly until it is told to remeasure.
+function refreshMapSize(){
+  map.invalidateSize();
+  updateMapInfo();
 }
 
 
 //Initialize
 setText('windowSize', NUM_DATA_PER_FRAME);
+setupSettingsInputs();
+setupMapButtons();
 redrawAreas();
+fitCampus();
 updateContextDisplay();
+updateActivityDebug();
+
+setTimeout(refreshMapSize, 300);
+setTimeout(refreshMapSize, 1200);
+window.addEventListener('resize', refreshMapSize);
+window.addEventListener('orientationchange', function(){ setTimeout(refreshMapSize, 300); });

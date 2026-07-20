@@ -15,28 +15,35 @@ const nextButton = document.querySelector("#next-button");
 const playIcon = document.querySelector("#play-icon");
 const recInfo = document.querySelector("#recInfo");
 const aiDebug = document.querySelector("#aiDebug");
+const queueInfo = document.querySelector("#queueInfo");
 
 const PLAY_ICON = "M8 5v14l11-7z";
 const PAUSE_ICON = "M6 5h4v14H6zm8 0h4v14h-4z";
 
 const RECOMMEND_ENDPOINT = "/.netlify/functions/recommend";
+const FADE_MS = 900;
 
 let tracks = [];
 let currentTrackIndex = -1;
 let audioUnlocked = false;
 let requestCount = 0;
 
-// The same mapping the serverless function uses, kept here as a last-resort
-// fallback for when the network request itself fails.
+// The playback queue, built from the three folders the model ranks.
+let queueFolders = [];
+let queue = [];
+let queuePos = -1;
+
+// Campus mapping. This is the client-side fallback and must stay identical
+// to the copy inside netlify/functions/recommend.js.
 const AREA_TO_BASE = {
   "H Village Vibe": "H Village Vibe",
   "Gym": "Exercise",
-  "Media": "Research (Delta)",
+  "Media": "Library Music",
   "Bus1": "Bus Waiting",
   "Bus2": "Bus Waiting",
-  "Subwway": "General",
-  "Sigma": "Research (Delta)",
-  "AlphaOmega": "Classroom",
+  "Subwway": "Cafeteria",
+  "Sigma": "Cafeteria",
+  "AlphaOmega": "SFC Office",
   "Cabins": "General",
   "Tennis": "Exercise",
   "Kappa1": "Classroom",
@@ -50,19 +57,34 @@ const AREA_TO_BASE = {
   "Lambda": "Classroom",
   "Theta": "Classroom",
   "Shrine": "General",
-  "SBC": "SFC Office",
-  "TauDelta": "Classroom",
+  "SBC": "H Village Vibe",
+  "TauDelta": "Research (Delta)",
   "Pond": "Komoike",
 };
 
-function isNight() {
-  const hour = new Date().getHours();
-  return hour >= 19 || hour < 5;
-}
+const ALLOWED_FOLDERS = [
+  "Bus Waiting",
+  "Cafeteria",
+  "Classroom/Resting",
+  "Classroom/Running",
+  "Classroom/Walking",
+  "Exercise/Gym",
+  "Exercise/Resting",
+  "Exercise/Running",
+  "Exercise/Walking",
+  "General/Resting",
+  "General/Resting(Night)",
+  "General/Running",
+  "General/Walking",
+  "General/Walking(Night)",
+  "H Village Vibe",
+  "Komoike",
+  "Library Music",
+  "Research (Delta)",
+  "SFC Office",
+];
 
-function fallbackFolder(area, activity) {
-  const base = AREA_TO_BASE[area] || "General";
-
+function ruleFolder(base, activity, night) {
   if (base === "Classroom") {
     if (activity === "walking") return "Classroom/Walking";
     if (activity === "running") return "Classroom/Running";
@@ -70,7 +92,6 @@ function fallbackFolder(area, activity) {
   }
 
   if (base === "Exercise") {
-    if (area === "Gym" && activity === "exercise") return "Exercise/Gym";
     if (activity === "walking") return "Exercise/Walking";
     if (activity === "running") return "Exercise/Running";
     if (activity === "exercise") return "Exercise/Gym";
@@ -79,12 +100,179 @@ function fallbackFolder(area, activity) {
 
   if (base === "General") {
     if (activity === "running") return "General/Running";
-    if (activity === "walking") return isNight() ? "General/Walking(Night)" : "General/Walking";
+    if (activity === "walking") return night ? "General/Walking(Night)" : "General/Walking";
     if (activity === "exercise") return "General/Running";
-    return isNight() ? "General/Resting(Night)" : "General/Resting";
+    return night ? "General/Resting(Night)" : "General/Resting";
   }
 
-  return base;
+  return ALLOWED_FOLDERS.includes(base) ? base : null;
+}
+
+function variantsOf(base, night) {
+  if (base === "Classroom") {
+    return ["Classroom/Resting", "Classroom/Walking", "Classroom/Running"];
+  }
+  if (base === "Exercise") {
+    return ["Exercise/Gym", "Exercise/Running", "Exercise/Walking", "Exercise/Resting"];
+  }
+  if (base === "General") {
+    return night
+      ? ["General/Resting(Night)", "General/Walking(Night)", "General/Running"]
+      : ["General/Resting", "General/Walking", "General/Running"];
+  }
+  return [base];
+}
+
+// The last-resort ranking used when the network request itself fails.
+function fallbackRanking(area, activity, night) {
+  const base = AREA_TO_BASE[area] || "General";
+  const list = [];
+
+  const push = (folder) => {
+    if (folder && ALLOWED_FOLDERS.includes(folder) && !list.includes(folder)) {
+      list.push(folder);
+    }
+  };
+
+  push(ruleFolder(base, activity, night));
+  variantsOf(base, night).forEach(push);
+  push("Library Music");
+  push("Cafeteria");
+  variantsOf("General", night).forEach(push);
+
+  return list.slice(0, 3);
+}
+
+
+// Audio graph. iOS Safari ignores the volume property of an audio element,
+// so fading has to go through a Web Audio gain node instead. If Web Audio is
+// unavailable we quietly fall back to stepping volume, which works elsewhere.
+
+let audioCtx = null;
+let gainNode = null;
+let mediaSource = null;
+let webAudioReady = false;
+let audioGraphTried = false;
+
+function setupAudioGraph() {
+  if (audioGraphTried) return;
+  audioGraphTried = true;
+
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+
+  try {
+    audioCtx = new Ctx();
+    mediaSource = audioCtx.createMediaElementSource(audio);
+    gainNode = audioCtx.createGain();
+    gainNode.gain.value = 1;
+    mediaSource.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    webAudioReady = true;
+  } catch (error) {
+    console.error("Web Audio unavailable, falling back to element volume:", error);
+    audioCtx = null;
+    gainNode = null;
+    webAudioReady = false;
+  }
+}
+
+function resumeAudioContext() {
+  if (audioCtx && audioCtx.state === "suspended") {
+    audioCtx.resume().catch(() => {});
+  }
+}
+
+function setGainNow(value) {
+  const clamped = Math.max(0, Math.min(1, value));
+
+  if (webAudioReady && gainNode && audioCtx) {
+    const t = audioCtx.currentTime;
+    gainNode.gain.cancelScheduledValues(t);
+    gainNode.gain.setValueAtTime(Math.max(clamped, 0.0001), t);
+    return;
+  }
+
+  try {
+    audio.volume = clamped;
+  } catch (error) {
+    // Some browsers refuse this. Nothing useful to do about it.
+  }
+}
+
+function rampGain(target, ms) {
+  return new Promise((resolve) => {
+    if (webAudioReady && gainNode && audioCtx) {
+      const t = audioCtx.currentTime;
+      const current = gainNode.gain.value;
+      gainNode.gain.cancelScheduledValues(t);
+      gainNode.gain.setValueAtTime(Math.max(current, 0.0001), t);
+      gainNode.gain.linearRampToValueAtTime(Math.max(target, 0.0001), t + ms / 1000);
+      setTimeout(resolve, ms + 60);
+      return;
+    }
+
+    const steps = 20;
+    let start = 1;
+    try {
+      start = audio.volume;
+    } catch (error) {
+      start = 1;
+    }
+    const delta = (target - start) / steps;
+    let step = 0;
+
+    const timer = setInterval(() => {
+      step += 1;
+      try {
+        audio.volume = Math.max(0, Math.min(1, start + delta * step));
+      } catch (error) {
+        // ignore
+      }
+      if (step >= steps) {
+        clearInterval(timer);
+        resolve();
+      }
+    }, Math.max(10, ms / steps));
+  });
+}
+
+
+function shuffled(values) {
+  const copy = values.slice();
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const swap = copy[i];
+    copy[i] = copy[j];
+    copy[j] = swap;
+  }
+  return copy;
+}
+
+function buildQueue(folders) {
+  const indices = [];
+
+  folders.forEach((folder) => {
+    const inFolder = [];
+    tracks.forEach((track, index) => {
+      if (track.group === folder) inFolder.push(index);
+    });
+    shuffled(inFolder).forEach((index) => indices.push(index));
+  });
+
+  return indices;
+}
+
+function updateQueueInfo() {
+  if (!queueInfo) return;
+
+  if (queue.length === 0) {
+    queueInfo.textContent = "Queue is empty.";
+    return;
+  }
+
+  queueInfo.textContent =
+    `Queue: ${queueFolders.join(" → ")} · track ${queuePos + 1} of ${queue.length}`;
 }
 
 function clockTime() {
@@ -173,6 +361,8 @@ async function playCurrentTrack() {
     loadTrack(0);
   }
 
+  resumeAudioContext();
+
   try {
     await audio.play();
   } catch (error) {
@@ -201,16 +391,38 @@ function loadTrack(index, shouldPlay = false) {
   progress.disabled = true;
   updatePlayButton(false);
   setStatus(`Selected: ${track.title}`);
+  updateQueueInfo();
 
   if (shouldPlay) {
     playCurrentTrack();
   }
 }
 
+// Move to a position in the queue, fading out the old track if one is playing
+// and always fading the new one in.
+async function playQueuePos(position, fadeOutFirst) {
+  if (position < 0 || position >= queue.length) return;
+
+  if (fadeOutFirst && !audio.paused) {
+    await rampGain(0, FADE_MS);
+  }
+
+  queuePos = position;
+  loadTrack(queue[position]);
+  setGainNow(0);
+  await playCurrentTrack();
+  await rampGain(1, FADE_MS);
+  updateQueueInfo();
+}
+
 function changeTrack(offset) {
-  if (tracks.length === 0) {
+  if (queue.length > 0) {
+    const next = (queuePos + offset + queue.length) % queue.length;
+    playQueuePos(next, true);
     return;
   }
+
+  if (tracks.length === 0) return;
 
   const wasPlaying = !audio.paused;
   const startingIndex = currentTrackIndex === -1 ? 0 : currentTrackIndex;
@@ -218,8 +430,12 @@ function changeTrack(offset) {
   loadTrack(nextIndex, wasPlaying);
 }
 
-// Called from the Start tracking tap in locationtracker.js.
+// Called from the Start tracking tap in locationtracker.js. This is the only
+// moment iOS will let us build the Web Audio graph and unlock playback.
 window.primeAudio = function () {
+  setupAudioGraph();
+  resumeAudioContext();
+
   if (audioUnlocked || tracks.length === 0) return;
 
   if (currentTrackIndex === -1) {
@@ -264,94 +480,128 @@ async function loadLibrary() {
   }
 }
 
-function playFolder(folder, sourceLabel) {
-  const index = tracks.findIndex((track) => track.group === folder);
+// Apply a ranked list of folders. If the top folder is the one already
+// playing, the music is deliberately left alone and only the queue behind it
+// is rebuilt, so the same song is never restarted.
+async function applyRecommendation(folders, sourceLabel) {
+  const playable = folders.filter((folder) => tracks.some((track) => track.group === folder));
 
-  if (index < 0) {
-    setRecInfo(`${sourceLabel} chose "${folder}", but no track sits in that folder.`);
-    return false;
+  if (playable.length === 0) {
+    setRecInfo(`${sourceLabel} chose ${folders.join(", ")}, but no tracks exist in those folders.`);
+    return { applied: false, kept: false, playable };
   }
 
-  setRecInfo(`${sourceLabel}: ${folder}`);
-  loadTrack(index, true);
-  return true;
+  const sameTopFolder = queueFolders.length > 0 && queueFolders[0] === playable[0];
+  const stillPlaying = currentTrackIndex !== -1 && !audio.paused;
+
+  queueFolders = playable;
+  queue = buildQueue(playable);
+
+  if (sameTopFolder && stillPlaying) {
+    const position = queue.indexOf(currentTrackIndex);
+    if (position >= 0) {
+      queuePos = position;
+    } else {
+      queue.unshift(currentTrackIndex);
+      queuePos = 0;
+    }
+    setRecInfo(`${sourceLabel}: ${playable.join(" → ")} (same folder, kept playing)`);
+    updateQueueInfo();
+    return { applied: true, kept: true, playable };
+  }
+
+  setRecInfo(`${sourceLabel}: ${playable.join(" → ")}`);
+  await playQueuePos(0, true);
+  return { applied: true, kept: false, playable };
 }
 
-async function requestRecommendation(area, activity) {
+async function requestRecommendation(context) {
   requestCount += 1;
 
   const label = requestCount;
-  const backup = fallbackFolder(area, activity);
+  const area = context.area;
+  const activity = context.activity;
+  const time = context.time || {};
+  const backup = fallbackRanking(area, activity, time.isNight === true);
   const sentAt = clockTime();
 
-  setAiDebug([
+  const header = [
     `request #${label} at ${sentAt}`,
     `sent area: ${area === null ? "(none)" : area}`,
     `sent activity: ${activity}`,
-    "waiting for the function...",
-  ]);
+    `sent time: ${time.weekday || "?"} ${time.local || "?"} (${time.band || "?"}, night=${time.isNight === true})`,
+  ];
+
+  setAiDebug(header.concat(["waiting for the function..."]));
 
   try {
     const response = await fetch(RECOMMEND_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ area, activity }),
+      body: JSON.stringify({ area, activity, time }),
     });
 
     const bodyText = await response.text();
 
     if (!response.ok) {
-      setAiDebug([
-        `request #${label} at ${sentAt}`,
-        `sent area: ${area === null ? "(none)" : area}`,
-        `sent activity: ${activity}`,
+      setAiDebug(header.concat([
         `FAILED with HTTP ${response.status}`,
         response.status === 404
           ? "the function is not deployed at /.netlify/functions/recommend"
           : bodyText.slice(0, 300),
-        `playing local fallback: ${backup}`,
-      ]);
-      playFolder(backup, `Offline rule (HTTP ${response.status})`);
+        `using local fallback: ${backup.join(" → ")}`,
+      ]));
+      await applyRecommendation(backup, `Offline rule (HTTP ${response.status})`);
       return;
     }
 
     const data = JSON.parse(bodyText);
-    const played = playFolder(data.folder, data.source || "AI pick");
+    const folders = Array.isArray(data.folders) && data.folders.length > 0 ? data.folders : backup;
+    const outcome = await applyRecommendation(folders, data.source || "AI pick");
 
-    setAiDebug([
-      `request #${label} at ${sentAt}`,
-      `sent area: ${area === null ? "(none)" : area}`,
-      `sent activity: ${activity}`,
+    setAiDebug(header.concat([
       `round trip: ${data.elapsedMs} ms`,
       `model: ${data.model || "(not called)"}`,
-      `raw model reply: ${data.raw === null ? "(none)" : JSON.stringify(data.raw)}`,
+      `raw model reply: ${data.raw === null || data.raw === undefined ? "(none)" : JSON.stringify(data.raw)}`,
       `how it was resolved: ${data.detail}`,
-      `chosen folder: ${data.folder}`,
+      `ranked folders: ${folders.join(" → ")}`,
       `source: ${data.source}`,
-      played ? "a track in that folder was found and started" : "NO TRACK EXISTS IN THAT FOLDER",
-    ]);
+      `web audio fading: ${webAudioReady ? "on" : "off, using element volume"}`,
+      outcome.kept
+        ? "same top folder, the current song was left alone"
+        : (outcome.applied
+            ? `queue rebuilt with ${queue.length} shuffled tracks, faded into the first one`
+            : "NO TRACK EXISTS IN ANY OF THOSE FOLDERS"),
+    ]));
   } catch (error) {
     console.error(error);
-    setAiDebug([
-      `request #${label} at ${sentAt}`,
-      `sent area: ${area === null ? "(none)" : area}`,
-      `sent activity: ${activity}`,
+    setAiDebug(header.concat([
       `network error: ${error.message}`,
-      `playing local fallback: ${backup}`,
-    ]);
-    playFolder(backup, "Offline rule (network error)");
+      `using local fallback: ${backup.join(" → ")}`,
+    ]));
+    await applyRecommendation(backup, "Offline rule (network error)");
   }
 }
 
+
 selector.addEventListener("change", () => {
   if (selector.value !== "") {
+    // A manual pick abandons the queue until the next recommendation.
+    queue = [];
+    queueFolders = [];
+    queuePos = -1;
+    setGainNow(1);
     loadTrack(Number(selector.value), true);
   }
 });
 
 playButton.addEventListener("click", () => {
   audioUnlocked = true;
+  setupAudioGraph();
+  resumeAudioContext();
+
   if (audio.paused) {
+    setGainNow(1);
     playCurrentTrack();
   } else {
     audio.pause();
@@ -409,7 +659,16 @@ audio.addEventListener("pause", () => {
   }
 });
 
+// When a song ends we walk the queue, which keeps us inside the three ranked
+// folders instead of wandering into unrelated music.
 audio.addEventListener("ended", () => {
+  if (queue.length > 0) {
+    const next = (queuePos + 1) % queue.length;
+    playQueuePos(next, false);
+    return;
+  }
+
+  if (tracks.length === 0) return;
   const nextIndex = (currentTrackIndex + 1) % tracks.length;
   loadTrack(nextIndex, true);
 });
@@ -425,5 +684,5 @@ loadLibrary();
 window.addEventListener("areaChanged", () => {
   const context = window.getCurrentContext();
   console.log("Context changed:", context);
-  requestRecommendation(context.area, context.activity);
+  requestRecommendation(context);
 });

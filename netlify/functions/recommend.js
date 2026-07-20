@@ -4,6 +4,9 @@
 // No npm packages are used, because a drag-and-drop deploy has no build step
 // and therefore cannot install dependencies. The OpenAI REST API is called
 // directly with the fetch that is built into the Node runtime.
+//
+// This version returns THREE ranked folders rather than one, so the player can
+// build a queue and move to the next most sensible folder when one runs out.
 
 const ALLOWED_FOLDERS = [
   "Bus Waiting",
@@ -27,15 +30,16 @@ const ALLOWED_FOLDERS = [
   "SFC Office",
 ];
 
+// Corrected campus mapping. Must stay identical to the copy in musicplayer.js.
 const AREA_TO_BASE = {
   "H Village Vibe": "H Village Vibe",
   "Gym": "Exercise",
-  "Media": "Research (Delta)",
+  "Media": "Library Music",
   "Bus1": "Bus Waiting",
   "Bus2": "Bus Waiting",
-  "Subwway": "General",
-  "Sigma": "Research (Delta)",
-  "AlphaOmega": "Classroom",
+  "Subwway": "Cafeteria",
+  "Sigma": "Cafeteria",
+  "AlphaOmega": "SFC Office",
   "Cabins": "General",
   "Tennis": "Exercise",
   "Kappa1": "Classroom",
@@ -49,20 +53,12 @@ const AREA_TO_BASE = {
   "Lambda": "Classroom",
   "Theta": "Classroom",
   "Shrine": "General",
-  "SBC": "SFC Office",
-  "TauDelta": "Classroom",
+  "SBC": "H Village Vibe",
+  "TauDelta": "Research (Delta)",
   "Pond": "Komoike",
 };
 
-function isNight() {
-  // Netlify runs in UTC, so shift to Japan Standard Time before reading the hour.
-  const hour = (new Date().getUTCHours() + 9) % 24;
-  return hour >= 19 || hour < 5;
-}
-
-// The rule the server uses when the model gives us something unusable,
-// and also the rule used to expand a bare base name such as "Classroom".
-function ruleFolder(base, activity) {
+function ruleFolder(base, activity, night) {
   if (base === "Classroom") {
     if (activity === "walking") return "Classroom/Walking";
     if (activity === "running") return "Classroom/Running";
@@ -78,78 +74,120 @@ function ruleFolder(base, activity) {
 
   if (base === "General") {
     if (activity === "running") return "General/Running";
-    if (activity === "walking") return isNight() ? "General/Walking(Night)" : "General/Walking";
+    if (activity === "walking") return night ? "General/Walking(Night)" : "General/Walking";
     if (activity === "exercise") return "General/Running";
-    return isNight() ? "General/Resting(Night)" : "General/Resting";
+    return night ? "General/Resting(Night)" : "General/Resting";
   }
 
-  if (ALLOWED_FOLDERS.indexOf(base) >= 0) return base;
-
-  return null;
+  return ALLOWED_FOLDERS.indexOf(base) >= 0 ? base : null;
 }
 
-function fallbackFolder(area, activity) {
+function variantsOf(base, night) {
+  if (base === "Classroom") {
+    return ["Classroom/Resting", "Classroom/Walking", "Classroom/Running"];
+  }
+  if (base === "Exercise") {
+    return ["Exercise/Gym", "Exercise/Running", "Exercise/Walking", "Exercise/Resting"];
+  }
+  if (base === "General") {
+    return night
+      ? ["General/Resting(Night)", "General/Walking(Night)", "General/Running"]
+      : ["General/Resting", "General/Walking", "General/Running"];
+  }
+  return [base];
+}
+
+// The rule-based ranking, used when the model is unavailable and also to top
+// up the list when the model returns fewer than three usable folders.
+function ruleRanking(area, activity, night) {
   const base = AREA_TO_BASE[area] || "General";
-  return ruleFolder(base, activity) || "General/Resting";
+  const list = [];
+
+  const push = (folder) => {
+    if (folder && ALLOWED_FOLDERS.indexOf(folder) >= 0 && list.indexOf(folder) < 0) {
+      list.push(folder);
+    }
+  };
+
+  push(ruleFolder(base, activity, night));
+  variantsOf(base, night).forEach(push);
+  push("Library Music");
+  push("Cafeteria");
+  variantsOf("General", night).forEach(push);
+
+  return list.slice(0, 3);
 }
 
-// Turn whatever the model said into a real folder name if we possibly can.
-// Returns { folder, how } where how explains what repair was needed.
-function normalise(rawInput, activity) {
+// Turn one line of model output into a real folder name if we possibly can.
+function normaliseLine(rawInput, activity, night) {
   const raw = String(rawInput || "")
     .trim()
+    .replace(/^\s*\d+\s*[.)]\s*/, "")
+    .replace(/^\s*[-*•]\s*/, "")
     .replace(/^["'`]+|["'`]+$/g, "")
     .replace(/[.!]+$/g, "")
     .replace(/\s*\/\s*/g, "/")
     .replace(/\s+/g, " ")
     .trim();
 
-  if (raw === "") return { folder: null, how: "empty reply" };
+  if (raw === "") return null;
 
-  // Exact match, ignoring case only.
   const exact = ALLOWED_FOLDERS.find(
     (candidate) => candidate.toLowerCase() === raw.toLowerCase(),
   );
-  if (exact) return { folder: exact, how: "exact match" };
+  if (exact) return exact;
 
-  // The model gave a bare base such as "Classroom", "Exercise" or "General".
   const base = ["Classroom", "Exercise", "General"].find(
     (candidate) => candidate.toLowerCase() === raw.toLowerCase(),
   );
   if (base) {
-    const expanded = ruleFolder(base, activity);
-    if (expanded) return { folder: expanded, how: `expanded "${raw}" using activity` };
+    const expanded = ruleFolder(base, activity, night);
+    if (expanded) return expanded;
   }
 
-  // The model wrote something like "Exercise / Gym" or "the Komoike folder".
   const contained = ALLOWED_FOLDERS.find(
     (candidate) => raw.toLowerCase().indexOf(candidate.toLowerCase()) >= 0,
   );
-  if (contained) return { folder: contained, how: "found folder inside a longer reply" };
+  if (contained) return contained;
 
-  return { folder: null, how: "no usable folder in reply" };
+  return null;
 }
 
-function buildPrompt(area, activity) {
+function describeTime(time) {
+  if (!time || typeof time.hour !== "number") {
+    return "The current local time is unknown.";
+  }
+
+  return [
+    `Local time on the listener's phone: ${time.weekday || "unknown day"} ${time.local || ""}.`,
+    `Time of day band: ${time.band || "unknown"}.`,
+    `Is it night time: ${time.isNight === true ? "yes" : "no"}.`,
+    `Is it a weekend: ${time.weekend === true ? "yes" : "no"}.`,
+  ].join("\n");
+}
+
+function buildPrompt(area, activity, time) {
   return `
-You are selecting music for a university student.
+You are selecting music for a university student walking around Keio SFC campus.
 
 Current campus location:
 ${area || "unknown"}
 
-Current activity:
+Current detected activity:
 ${activity || "unknown"}
 
-The campus locations correspond to music folder groups as follows:
+${describeTime(time)}
+
+The campus locations map to these music folder groups:
 
 H Village Vibe -> H Village Vibe
 Gym -> Exercise
-Media -> Research (Delta)
+Media -> Library Music
 Bus1 -> Bus Waiting
 Bus2 -> Bus Waiting
-Subwway -> General
-Sigma -> Research (Delta)
-AlphaOmega -> Classroom
+Subwway -> Cafeteria
+Sigma -> Cafeteria
+AlphaOmega -> SFC Office
 Cabins -> General
 Tennis -> Exercise
 Kappa1 -> Classroom
@@ -163,8 +201,8 @@ Omnicron2 -> Classroom
 Lambda -> Classroom
 Theta -> Classroom
 Shrine -> General
-SBC -> SFC Office
-TauDelta -> Classroom
+SBC -> H Village Vibe
+TauDelta -> Research (Delta)
 Pond -> Komoike
 
 The ONLY valid answers are these exact strings:
@@ -172,20 +210,25 @@ The ONLY valid answers are these exact strings:
 ${ALLOWED_FOLDERS.map((folder) => "- " + folder).join("\n")}
 
 Note that "Classroom", "Exercise" and "General" are NOT valid answers on their own.
-They are groups, and you must choose the full name including the part after the slash,
-based on the activity.
+They are groups, and you must give the full name including the part after the slash.
 
 Rules:
-- Activity resting means choose a Resting folder.
-- Activity walking means choose a Walking folder.
-- Activity running means choose a Running folder.
-- Activity exercise in the Gym means Exercise/Gym.
-- If the location is unknown or unmapped, choose a General folder matching the activity.
-- Bus Waiting, Komoike, SFC Office, Research (Delta) and H Village Vibe have no
-  activity variants, so use them exactly as written.
+- Activity resting means prefer a Resting folder.
+- Activity walking means prefer a Walking folder.
+- Activity running means prefer a Running folder.
+- Activity exercise at the Gym means Exercise/Gym.
+- When it is night time, prefer the (Night) variants where they exist.
+- If the location is unknown or unmapped, use a General folder matching the activity.
+- Bus Waiting, Cafeteria, Komoike, SFC Office, Library Music, Research (Delta) and
+  H Village Vibe have no activity variants, so use them exactly as written.
 
-Reply with ONE line containing ONLY the exact folder string. No quotes, no full stop,
-no explanation.
+Give a RANKED list of exactly THREE different folders. The first is the best fit for
+the location, the activity and the time of day. The second and third are what should
+play next once the first folder has been exhausted, so they should still make sense
+for where the listener is and when it is.
+
+Reply with exactly three lines. Each line contains only one exact folder string.
+No numbering, no quotes, no full stops, no explanation.
 `;
 }
 
@@ -204,11 +247,13 @@ exports.handler = async function (event) {
 
   let area = null;
   let activity = null;
+  let time = null;
 
   try {
     const payload = JSON.parse(event.body || "{}");
     area = payload.area;
     activity = payload.activity;
+    time = payload.time || null;
   } catch (error) {
     return {
       statusCode: 400,
@@ -217,7 +262,8 @@ exports.handler = async function (event) {
     };
   }
 
-  const backup = fallbackFolder(area, activity);
+  const night = time && time.isNight === true;
+  const backup = ruleRanking(area, activity, night);
 
   // Always answer with something playable, and describe how we got there,
   // so the phone can show the real story instead of a bare failure.
@@ -230,6 +276,7 @@ exports.handler = async function (event) {
           {
             area: area || null,
             activity: activity || null,
+            night: night,
             elapsedMs: Date.now() - started,
           },
           extra,
@@ -240,7 +287,8 @@ exports.handler = async function (event) {
 
   if (!apiKey) {
     return reply({
-      folder: backup,
+      folders: backup,
+      folder: backup[0],
       source: "server rule",
       raw: null,
       detail: "OPENAI_API_KEY is not set on this site",
@@ -261,8 +309,8 @@ exports.handler = async function (event) {
       body: JSON.stringify({
         model: "gpt-4.1-mini",
         temperature: 0,
-        max_tokens: 20,
-        messages: [{ role: "user", content: buildPrompt(area, activity) }],
+        max_tokens: 60,
+        messages: [{ role: "user", content: buildPrompt(area, activity, time) }],
       }),
     });
 
@@ -272,7 +320,8 @@ exports.handler = async function (event) {
       const detail = await response.text();
       console.error("OpenAI error:", response.status, detail);
       return reply({
-        folder: backup,
+        folders: backup,
+        folder: backup[0],
         source: "server rule",
         raw: null,
         detail: `OpenAI returned HTTP ${response.status}: ${detail.slice(0, 200)}`,
@@ -289,30 +338,46 @@ exports.handler = async function (event) {
         ? data.choices[0].message.content
         : "";
 
-    const result = normalise(raw, activity);
+    const parsed = [];
+    raw.split("\n").forEach((line) => {
+      const folder = normaliseLine(line, activity, night);
+      if (folder && parsed.indexOf(folder) < 0) parsed.push(folder);
+    });
 
-    if (!result.folder) {
+    const accepted = parsed.length;
+
+    // Top the list up from the rule ranking if the model gave us fewer than three.
+    backup.forEach((folder) => {
+      if (parsed.length < 3 && parsed.indexOf(folder) < 0) parsed.push(folder);
+    });
+
+    if (parsed.length === 0) {
       console.error("Unusable model reply:", JSON.stringify(raw));
       return reply({
-        folder: backup,
+        folders: backup,
+        folder: backup[0],
         source: "server rule",
         raw: raw,
-        detail: `Model reply could not be matched (${result.how})`,
+        detail: "no line of the model reply matched an allowed folder",
       });
     }
 
+    const folders = parsed.slice(0, 3);
+
     return reply({
-      folder: result.folder,
-      source: "AI pick",
+      folders: folders,
+      folder: folders[0],
+      source: accepted > 0 ? "AI pick" : "server rule",
       raw: raw,
-      detail: result.how,
+      detail: `model gave ${accepted} usable folder(s), list topped up to ${folders.length}`,
       model: data.model || "gpt-4.1-mini",
     });
   } catch (error) {
     const aborted = error && error.name === "AbortError";
     console.error(error);
     return reply({
-      folder: backup,
+      folders: backup,
+      folder: backup[0],
       source: "server rule",
       raw: null,
       detail: aborted ? "OpenAI did not answer within 8 seconds" : String(error.message || error),
