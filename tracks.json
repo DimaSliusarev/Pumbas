@@ -1,14 +1,39 @@
 {
   "tracks": [
     {
+      "title": "Ed Sheeran - Galway Girl",
+      "group": "Bus Waiting",
+      "url": "./usa-1/Bus%20Waiting/Ed%20Sheeran%20-%20Galway%20Girl.mp3"
+    },
+    {
       "title": "Wii Shop Channel Main Theme (HQ)",
       "group": "Bus Waiting",
       "url": "./usa-1/Bus%20Waiting/Wii%20Shop%20Channel%20Main%20Theme%20(HQ).mp3"
     },
     {
+      "title": "City of Angels - Arrows to Athens",
+      "group": "Cafeteria",
+      "url": "./usa-1/Cafeteria/City%20of%20Angels%20-%20Arrows%20to%20Athens.mp3"
+    },
+    {
       "title": "Wii Party Soundtrack Main Menu Music (Nostalgia Version)",
       "group": "Cafeteria",
       "url": "./usa-1/Cafeteria/Wii%20Party%20Soundtrack%20Main%20Menu%20Music%20(Nostalgia%20Version).mp3"
+    },
+    {
+      "title": "05. I Really Want to Stay at Your House",
+      "group": "Classroom/Resting",
+      "url": "./usa-1/Classroom/Resting/05.%20I%20Really%20Want%20to%20Stay%20at%20Your%20House.mp3"
+    },
+    {
+      "title": "Cyberpunk 2077    Never Fade Away by SAMURAI (Refused)",
+      "group": "Classroom/Resting",
+      "url": "./usa-1/Classroom/Resting/Cyberpunk%202077%20%20%20%20Never%20Fade%20Away%20by%20SAMURAI%20(Refused).mp3"
+    },
+    {
+      "title": "Yeat - Sorry Bout That",
+      "group": "Classroom/Resting",
+      "url": "./usa-1/Classroom/Resting/Yeat%20-%20Sorry%20Bout%20That.mp3"
     },
     {
       "title": "試験中 (P3R ver.)",
@@ -21,14 +46,59 @@
       "url": "./usa-1/Classroom/Running/Floral%20Fury.mp3"
     },
     {
+      "title": "Lustra – Scotty Doesn_t Know",
+      "group": "Classroom/Running",
+      "url": "./usa-1/Classroom/Running/Lustra%20%E2%80%93%20Scotty%20Doesn_t%20Know.mp3"
+    },
+    {
+      "title": "MUKANJYO (Vinland Saga OST)   Survive Said The Prophet",
+      "group": "Classroom/Running",
+      "url": "./usa-1/Classroom/Running/MUKANJYO%20(Vinland%20Saga%20OST)%20%20%20Survive%20Said%20The%20Prophet.mp3"
+    },
+    {
+      "title": "ビッケブランカ_Black_Catcher_Vicke_Blanka_Black_CatcherMP3_160K",
+      "group": "Classroom/Running",
+      "url": "./usa-1/Classroom/Running/%E3%83%92%E3%82%99%E3%83%83%E3%82%B1%E3%83%95%E3%82%99%E3%83%A9%E3%83%B3%E3%82%AB_Black_Catcher_Vicke_Blanka_Black_CatcherMP3_160K.mp3"
+    },
+    {
+      "title": "DNCE - Cake By The Ocean",
+      "group": "Classroom/Walking",
+      "url": "./usa-1/Classroom/Walking/DNCE%20-%20Cake%20By%20The%20Ocean.mp3"
+    },
+    {
+      "title": "Duvet Boa",
+      "group": "Classroom/Walking",
+      "url": "./usa-1/Classroom/Walking/Duvet%20Boa.mp3"
+    },
+    {
+      "title": "Mark_Ronson_Uptown_Funk_Official_Video_ft_Bruno_MarsMP3_160K",
+      "group": "Classroom/Walking",
+      "url": "./usa-1/Classroom/Walking/Mark_Ronson_Uptown_Funk_Official_Video_ft_Bruno_MarsMP3_160K.mp3"
+    },
+    {
       "title": "Title Screen - Animal Crossing_ New Horizons Music",
       "group": "Classroom/Walking",
       "url": "./usa-1/Classroom/Walking/Title%20Screen%20-%20Animal%20Crossing_%20New%20Horizons%20Music.mp3"
     },
     {
+      "title": "Animal I Have Become   Three Days Grace",
+      "group": "Exercise/Gym",
+      "url": "./usa-1/Exercise/Gym/Animal%20I%20Have%20Become%20%20%20Three%20Days%20Grace.mp3"
+    },
+    {
+      "title": "Down With the Sickness   Disturbed",
+      "group": "Exercise/Gym",
+      "url": "./usa-1/Exercise/Gym/Down%20With%20the%20Sickness%20%20%20Disturbed.mp3"
+    },
+    {
       "title": "Eternxlkz - TOKYO DRIFT FUNK (Official Audio)",
       "group": "Exercise/Gym",
       "url": "./usa-1/Exercise/Gym/Eternxlkz%20-%20TOKYO%20DRIFT%20FUNK%20(Official%20Audio).mp3"
+    },
+    {
+      "title": "From The Inside   Linkin Park",
+      "group": "Exercise/Gym",
+      "url": "./usa-1/Exercise/Gym/From%20The%20Inside%20%20%20Linkin%20Park.mp3"
     },
     {
       "title": "GUILE_S THEME",
@@ -46,6 +116,21 @@
       "url": "./usa-1/Exercise/Gym/We%20are%20number%20one.mp3"
     },
     {
+      "title": "East_Duo_Chubina_ბანცარული",
+      "group": "Exercise/Resting",
+      "url": "./usa-1/Exercise/Resting/East_Duo_Chubina_%E1%83%91%E1%83%90%E1%83%9C%E1%83%AA%E1%83%90%E1%83%A0%E1%83%A3%E1%83%9A%E1%83%98.mp3"
+    },
+    {
+      "title": "Superheaven - Youngest Daughter",
+      "group": "Exercise/Resting",
+      "url": "./usa-1/Exercise/Resting/Superheaven%20-%20Youngest%20Daughter.mp3"
+    },
+    {
+      "title": "Where_d all the Time go",
+      "group": "Exercise/Resting",
+      "url": "./usa-1/Exercise/Resting/Where_d%20all%20the%20Time%20go.mp3"
+    },
+    {
       "title": "Wii Sports - Boxing Results Music",
       "group": "Exercise/Resting",
       "url": "./usa-1/Exercise/Resting/Wii%20Sports%20-%20Boxing%20Results%20Music.mp3"
@@ -61,9 +146,19 @@
       "url": "./usa-1/Exercise/Running/Death%20By%20Glamour.mp3"
     },
     {
+      "title": "Diver   NICO Touches the Walls",
+      "group": "Exercise/Running",
+      "url": "./usa-1/Exercise/Running/Diver%20%20%20NICO%20Touches%20the%20Walls.mp3"
+    },
+    {
       "title": "It_s Pizza Time! 4",
       "group": "Exercise/Running",
       "url": "./usa-1/Exercise/Running/It_s%20Pizza%20Time!%204.mp3"
+    },
+    {
+      "title": "NEFFEX - Grateful [Copyright Free](MP3_70K)",
+      "group": "Exercise/Running",
+      "url": "./usa-1/Exercise/Running/NEFFEX%20-%20Grateful%20%5BCopyright%20Free%5D(MP3_70K).mp3"
     },
     {
       "title": "Super Sonic Racing 4",
@@ -71,14 +166,34 @@
       "url": "./usa-1/Exercise/Running/Super%20Sonic%20Racing%204.mp3"
     },
     {
+      "title": "The Goo Goo Dolls Iris (320)",
+      "group": "Exercise/Running",
+      "url": "./usa-1/Exercise/Running/The%20Goo%20Goo%20Dolls%20Iris%20(320).mp3"
+    },
+    {
       "title": "It_s Pizza Time! 4",
       "group": "Exercise/Walking",
       "url": "./usa-1/Exercise/Walking/It_s%20Pizza%20Time!%204.mp3"
     },
     {
+      "title": "kokori  - evergreen  richy mitch and the coal mine",
+      "group": "Exercise/Walking",
+      "url": "./usa-1/Exercise/Walking/kokori%20%20-%20evergreen%20%20richy%20mitch%20and%20the%20coal%20mine.mp3"
+    },
+    {
       "title": "Rivers in the Desert - Scramble - Persona 5 Scramble_ The Phantom Strikers",
       "group": "Exercise/Walking",
       "url": "./usa-1/Exercise/Walking/Rivers%20in%20the%20Desert%20-%20Scramble%20-%20Persona%205%20Scramble_%20The%20Phantom%20Strikers.mp3"
+    },
+    {
+      "title": "Tek It Cobain Cover",
+      "group": "Exercise/Walking",
+      "url": "./usa-1/Exercise/Walking/Tek%20It%20Cobain%20Cover.mp3"
+    },
+    {
+      "title": "Where_d all the Time go",
+      "group": "Exercise/Walking",
+      "url": "./usa-1/Exercise/Walking/Where_d%20all%20the%20Time%20go.mp3"
     },
     {
       "title": "Wii Sports - Title (HQ)",
@@ -91,14 +206,44 @@
       "url": "./usa-1/General/Resting/Devil%20May%20Cry%205%20OST%20Nico_s%20Theme.mp3"
     },
     {
+      "title": "Starboy - The Weeknd",
+      "group": "General/Resting",
+      "url": "./usa-1/General/Resting/Starboy%20-%20The%20Weeknd.mp3"
+    },
+    {
       "title": "Beneath the Mask -rain-",
       "group": "General/Resting (Night)",
       "url": "./usa-1/General/Resting%20(Night)/Beneath%20the%20Mask%20-rain-.mp3"
     },
     {
+      "title": "The Weeknd - Save Your Tears",
+      "group": "General/Resting (Night)",
+      "url": "./usa-1/General/Resting%20(Night)/The%20Weeknd%20-%20Save%20Your%20Tears.mp3"
+    },
+    {
+      "title": "Eminem Feat Nate Dogg - _Till I Collapse",
+      "group": "General/Running",
+      "url": "./usa-1/General/Running/Eminem%20Feat%20Nate%20Dogg%20-%20_Till%20I%20Collapse.mp3"
+    },
+    {
       "title": "James Shimoji - Pepsi Man Theme Song (ORIGINAL)",
       "group": "General/Running",
       "url": "./usa-1/General/Running/James%20Shimoji%20-%20Pepsi%20Man%20Theme%20Song%20(ORIGINAL).mp3"
+    },
+    {
+      "title": "The real Slim Shady",
+      "group": "General/Running",
+      "url": "./usa-1/General/Running/The%20real%20Slim%20Shady.mp3"
+    },
+    {
+      "title": "Эминем - Without Me",
+      "group": "General/Running",
+      "url": "./usa-1/General/Running/%D0%AD%D0%BC%D0%B8%D0%BD%D0%B5%D0%BC%20-%20Without%20Me.mp3"
+    },
+    {
+      "title": "Billie Jean - Michael Jackson",
+      "group": "General/Walking",
+      "url": "./usa-1/General/Walking/Billie%20Jean%20-%20Michael%20Jackson.mp3"
     },
     {
       "title": "Pizza Tower OST - Pizza Deluxe (OFFICIAL) 4",
@@ -111,9 +256,29 @@
       "url": "./usa-1/General/Walking%20(Night)/Color%20Your%20Night%204.mp3"
     },
     {
+      "title": "The Weeknd - Blinding Lights (Official Audio)(MP3_128K)_1",
+      "group": "General/Walking (Night)",
+      "url": "./usa-1/General/Walking%20(Night)/The%20Weeknd%20-%20Blinding%20Lights%20(Official%20Audio)(MP3_128K)_1.mp3"
+    },
+    {
       "title": "Home",
       "group": "H Village Vibe",
       "url": "./usa-1/H%20Village%20Vibe/Home.mp3"
+    },
+    {
+      "title": "Kanye West - Stronger",
+      "group": "H Village Vibe",
+      "url": "./usa-1/H%20Village%20Vibe/Kanye%20West%20-%20Stronger.mp3"
+    },
+    {
+      "title": "On Sight   Kanye West feat. Skrillex",
+      "group": "H Village Vibe",
+      "url": "./usa-1/H%20Village%20Vibe/On%20Sight%20%20%20Kanye%20West%20feat.%20Skrillex.mp3"
+    },
+    {
+      "title": "Lana Del Rey - Summer time sadness",
+      "group": "Komoike",
+      "url": "./usa-1/Komoike/Lana%20Del%20Rey%20-%20Summer%20time%20sadness.mp3"
     },
     {
       "title": "The Duck Song",
@@ -121,9 +286,29 @@
       "url": "./usa-1/Komoike/The%20Duck%20Song.mp4"
     },
     {
+      "title": "yeat-Nun id changë",
+      "group": "Komoike",
+      "url": "./usa-1/Komoike/yeat-Nun%20id%20change%CC%88.mp3"
+    },
+    {
+      "title": "02 - Geralt of Rivia",
+      "group": "Library Music",
+      "url": "./usa-1/Library%20Music/02%20-%20Geralt%C2%A0of%C2%A0Rivia.mp3"
+    },
+    {
       "title": "de Blob - Blissful",
       "group": "Library Music",
       "url": "./usa-1/Library%20Music/de%20Blob%20-%20Blissful.mp3"
+    },
+    {
+      "title": "Dorian Concept - Hide Slow",
+      "group": "Library Music",
+      "url": "./usa-1/Library%20Music/Dorian%20Concept%20-%20Hide%20Slow.mp3"
+    },
+    {
+      "title": "one last game [one]   C418",
+      "group": "Library Music",
+      "url": "./usa-1/Library%20Music/one%20last%20game%20%5Bone%5D%20%20%20C418.mp3"
     },
     {
       "title": "11. Garden of Hopes and Dreams (DELTARUNE Chapter 5 Soundtrack) - Toby Fox",
@@ -131,9 +316,29 @@
       "url": "./usa-1/Research%20(Delta)/11.%20Garden%20of%20Hopes%20and%20Dreams%20(DELTARUNE%20Chapter%205%20Soundtrack)%20-%20Toby%20Fox.mp3"
     },
     {
+      "title": "Toxicity - System of a Down (320)",
+      "group": "Research (Delta)",
+      "url": "./usa-1/Research%20(Delta)/Toxicity%20-%20System%20of%20a%20Down%20(320).mp3"
+    },
+    {
+      "title": "berserk_gatsu_guts_theme_slowed_reverb_.hd",
+      "group": "SFC office",
+      "url": "./usa-1/SFC%20office/berserk_gatsu_guts_theme_slowed_reverb_.hd.mp3"
+    },
+    {
       "title": "Life Will Change",
       "group": "SFC office",
       "url": "./usa-1/SFC%20office/Life%20Will%20Change.mp3"
+    },
+    {
+      "title": "miki matsubara-stay With Me_256k",
+      "group": "SFC office",
+      "url": "./usa-1/SFC%20office/miki%20matsubara-stay%20With%20Me_256k.mp3"
+    },
+    {
+      "title": "Travis-Scott-FEIN-(Ft-Playboi-Carti)-128",
+      "group": "SFC office",
+      "url": "./usa-1/SFC%20office/Travis-Scott-FEIN-(Ft-Playboi-Carti)-128.mp3"
     }
   ]
 }
